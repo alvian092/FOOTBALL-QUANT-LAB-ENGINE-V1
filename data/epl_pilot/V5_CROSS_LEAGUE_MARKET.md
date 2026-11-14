@@ -10,7 +10,7 @@
 ## Reproduce
 
 ```bash
-python -m quantlab.fetch_cross_league --output-dir data/cross_league --start-year 2010 --end-year 2025
+python -m quantlab.fetch_cross_league --output-dir data/cross_league --start-year 2010 --end-year 2026
 python -m quantlab.cross_league \
   --input bundesliga=data/cross_league/bundesliga.csv \
   --input laliga=data/cross_league/laliga.csv \
@@ -33,6 +33,8 @@ pytest -q
 - Minimum 100 prior results for base predictions and 300 prior OOS predictions before adaptive calibration/weights.
 
 ## Odds / CLV protocol
+
+- The TipsAudit monthly snapshot used here covers 11 June–6 November 2026. Therefore the results fetch must include settled 2026–27 fixtures (`end-year 2026`); stopping at 2025–26 creates a disjoint time window and guarantees zero temporal overlap. The current season is incomplete and only settled matches are used.
 
 - Join on normalized home/away team names and kickoff date within ±1 UTC day. Only exact team-pair matches are retained; inspect join coverage and unmatched rows.
 - Exclude void results and fixtures whose teams were reversed after the logged prediction.
