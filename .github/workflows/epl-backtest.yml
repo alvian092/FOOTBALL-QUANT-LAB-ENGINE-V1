@@ -115,10 +115,10 @@ jobs:
             --output-dir artifacts/international_market_intelligence
       - name: Evaluate category-calibrated international odds, ROI, CLV and drawdown
         run: |
-          python -m quantlab.market_backtest \\
-            --predictions artifacts/international_v2/international_v2_calibrated_predictions.csv \\
-            --odds data/market/tipsaudit-predictions-all.csv \\
-            --model-prefix model_intl_v2 --min-ev 0.03 \\
+          python -m quantlab.market_backtest \
+            --predictions artifacts/international_v2/international_v2_calibrated_predictions.csv \
+            --odds data/market/tipsaudit-predictions-all.csv \
+            --model-prefix model_intl_v2 --min-ev 0.03 \
             --output-dir artifacts/international_market_intelligence_v2
       - name: Upload international evaluation reports
         uses: actions/upload-artifact@v4
