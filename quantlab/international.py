@@ -46,7 +46,7 @@ COMPETITION_K_MULTIPLIERS = {
     "concacaf_gold_cup_qualification": 1.0,
     "ofc_nations_cup": 1.2,
 }
-MATCH_RE = re.compile(r"^\\s{2}(.+?)\\s+(\\d+)\\s*-\\s*(\\d+)\\s+(.+?)(?:\\s+@\\s+(.+))?$")
+MATCH_RE = re.compile(r"^\s{2}(.+?)\s+(\d+)\s*-\s*(\d+)\s+(.+?)(?:\s+@\s+(.+))?$")
 
 
 def _read_url(url: str) -> str:
@@ -60,7 +60,7 @@ def _read_url(url: str) -> str:
 
 def parse_football_txt(content: str, filename: str, competition: str) -> list[dict]:
     """Parse settled fixtures from one openfootball Football.TXT file."""
-    match = re.match(r"(\\d{4})_", Path(filename).name)
+    match = re.match(r"(\d{4})_", Path(filename).name)
     if not match:
         raise ValueError(f"Cannot infer year from filename: {filename}")
     year = int(match.group(1))
@@ -70,14 +70,14 @@ def parse_football_txt(content: str, filename: str, competition: str) -> list[di
         stripped = line.strip()
         if not stripped or stripped.startswith(("=", "#", "(")):
             continue
-        if re.match(r"^[A-Z][a-z]{2} [A-Z][a-z]{2} \\d{1,2}$", stripped):
+        if re.match(r"^[A-Z][a-z]{2} [A-Z][a-z]{2} \d{1,2}$", stripped):
             current_date = datetime.strptime(f"{stripped} {year}", "%a %b %d %Y").date().isoformat()
             continue
         parsed = MATCH_RE.match(line)
         if not parsed or current_date is None:
             continue
         home, hg, ag, away, venue = parsed.groups()
-        home, away = re.sub(r"\\s+", " ", home).strip(), re.sub(r"\\s+", " ", away).strip()
+        home, away = re.sub(r"\s+", " ", home).strip(), re.sub(r"\s+", " ", away).strip()
         if not home or not away or home == away:
             continue
         rows.append({
@@ -99,7 +99,7 @@ def _tree_files(tree_text: str, start_year: int, end_year: int) -> list[tuple[st
         if folder:
             current_dir = folder.group(1).strip()
             continue
-        file_match = re.search(r"([0-9]{4}_[a-z0-9_]+\\.txt)$", line.strip())
+        file_match = re.search(r"([0-9]{4}_[a-z0-9_]+\.txt)$", line.strip())
         if current_dir in COMPETITION_DIRS and file_match:
             filename = file_match.group(1)
             year = int(filename[:4])
