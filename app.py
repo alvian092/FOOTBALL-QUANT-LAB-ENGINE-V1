@@ -256,14 +256,21 @@ elif page == "Walk-Forward Backtest":
             def historical_predictor(train, fixture):
                 league_home = float(train.home_goals.mean())
                 league_away = float(train.away_goals.mean())
-                hstats = team_form_stats(train, str(fixture.home_team), limit=20, half_life=5)
-                astats = team_form_stats(train, str(fixture.away_team), limit=20, half_life=5)
+                league_home, league_away = float(train.home_goals.mean()), float(train.away_goals.mean())
+                try:
+                    hstats = team_form_stats(train, str(fixture.home_team), limit=20, half_life=5)
+                except ValueError:
+                    hstats = {"scored_per_match":league_home,"conceded_per_match":league_away,"xg_for":None,"xg_against":None}
+                try:
+                    astats = team_form_stats(train, str(fixture.away_team), limit=20, half_life=5)
+                except ValueError:
+                    astats = {"scored_per_match":league_away,"conceded_per_match":league_home,"xg_for":None,"xg_against":None}
                 has_xg = {"home_xg","away_xg"}.issubset(train.columns) and train[["home_xg","away_xg"]].notna().all().all()
                 if has_xg:
                     league_home, league_away = float(train.home_xg.mean()), float(train.away_xg.mean())
                     h_for, h_against = hstats["xg_for"], hstats["xg_against"]
                     a_for, a_against = astats["xg_for"], astats["xg_against"]
-                    if None in (h_for,h_against,a_for,a_against):
+                    if any(v is None for v in (h_for,h_against,a_for,a_against)):
                         has_xg = False
                 if not has_xg:
                     h_for, h_against = hstats["scored_per_match"], hstats["conceded_per_match"]
@@ -297,6 +304,7 @@ elif page == "Walk-Forward Backtest":
                     y.metric("Bookmaker Brier",f"{report['market']['brier']:.4f}")
                     z.metric("Bookmaker log loss",f"{report['market']['log_loss']:.4f}")
                     st.write(f"Model edge vs market — Brier improvement: **{report['model_edge_vs_market_brier']:+.4f}** • Log-loss improvement: **{report['model_edge_vs_market_log_loss']:+.4f}** (positive favours model).")
+                    st.caption(f"Paired 95% bootstrap CI — Brier edge: {report['model_edge_brier_ci'][0]:+.4f} to {report['model_edge_brier_ci'][1]:+.4f}; Log-loss edge: {report['model_edge_log_loss_ci'][0]:+.4f} to {report['model_edge_log_loss_ci'][1]:+.4f}. An interval crossing zero does not establish superiority.")
                 else:
                     st.info("No complete 1X2 odds columns found. Model vs bookmaker comparison is unavailable.")
                 st.dataframe(results,use_container_width=True)
