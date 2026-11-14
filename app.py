@@ -11,6 +11,9 @@ import streamlit as st
 
 from quantlab.data import validate_matches_csv, team_form_stats, venue_stats
 from quantlab.backtesting import walk_forward_backtest, segmented_performance
+from quantlab.ensemble import elo_ratings_from_history, poisson_component, blend_probabilities, fit_ensemble_weights
+from quantlab.calibration import fit_temperature, calibration_report, apply_temperature
+from quantlab.scanner import scan_1x2_market
 from quantlab.market_intelligence import validate_odds_snapshots, summarize_odds_movement
 from quantlab.probability import calculate_probabilities, estimate_expected_goals, top_correct_scores
 from quantlab.market import evaluate_value, no_vig_probabilities, overround
@@ -42,7 +45,7 @@ st.title("⚽ FOOTBALL QUANT LAB")
 st.caption("Quantitative football analysis • Probability • Market intelligence • Risk control")
 page = st.sidebar.radio("NAVIGATION", ["Dashboard Overview", "Match Analysis", "Probability Explorer",
     "Odds Intelligence", "Value Bet Scanner", "Risk Management", "Prediction Tracker",
-    "Model Performance", "CSV Data Management", "Walk-Forward Backtest", "Market Intelligence", "Backup & Restore", "Settings"])
+    "Model Performance", "CSV Data Management", "Walk-Forward Backtest", "Market Intelligence", "V4 Predictive Edge Scanner", "Backup & Restore", "Settings"])
 
 matches = load_matches(DB_PATH)
 preds = list_predictions(DB_PATH)
@@ -140,6 +143,142 @@ elif page == "Market Intelligence":
         st.dataframe(snapshots,use_container_width=True)
     else:
         st.info("No historical odds snapshots yet. Upload an odds history CSV to activate movement analysis.")
+
+
+elif page == "V4 Predictive Edge Scanner":
+    st.subheader("V4 — Predictive Edge & Automated Market Scanner")
+    st.caption("Ensemble preview, chronological calibration workflow, and conservative market screening. No live bookmaker feed is connected.")
+
+    st.markdown("### 1. Three-model ensemble preview")
+    teams = sorted(set(matches.home_team.astype(str)) | set(matches.away_team.astype(str))) if not matches.empty else []
+    if len(teams) >= 2:
+        left, right = st.columns(2)
+        home = left.selectbox("Home team", teams, key="v4_home")
+        away = right.selectbox("Away team", [t for t in teams if t != home], key="v4_away")
+        fitted_weights = st.session_state.get("v4_fitted_weights", {"poisson":0.4,"dixon_coles":0.4,"elo":0.2})
+        pw = st.slider("Poisson weight", 0.0, 1.0, float(fitted_weights["poisson"]), 0.05, key="v4_pw")
+        dw = st.slider("Dixon-Coles weight", 0.0, 1.0, float(fitted_weights["dixon_coles"]), 0.05, key="v4_dw")
+        ew = st.slider("Elo weight", 0.0, 1.0, float(fitted_weights["elo"]), 0.05, key="v4_ew")
+        if pw + dw + ew > 0 and st.button("Build ensemble forecast", type="primary"):
+            try:
+                hs = venue_stats(matches, home, "home", 20, 5)
+                aws = venue_stats(matches, away, "away", 20, 5)
+                if min(hs["matches"], aws["matches"]) < 5:
+                    raise ValueError("Minimum 5 home matches and 5 away matches are required.")
+                has_xg = hs["xg_for"] is not None and aws["xg_for"] is not None
+                if has_xg:
+                    lh, la = estimate_expected_goals(hs["xg_for"], hs["xg_against"], aws["xg_for"], aws["xg_against"], float(matches.home_xg.mean()), float(matches.away_xg.mean()))
+                    source = "xG/xGA"
+                else:
+                    lh, la = estimate_expected_goals(hs["scored_per_match"], hs["conceded_per_match"], aws["scored_per_match"], aws["conceded_per_match"], float(matches.home_goals.mean()), float(matches.away_goals.mean()))
+                    source = "Goals proxy (no xG feed)"
+                components = {
+                    "Poisson": poisson_component(lh, la, rho=0.0),
+                    "Dixon-Coles": poisson_component(lh, la, rho=-0.08),
+                    "Elo": elo_ratings_from_history(matches, home, away),
+                }
+                ensemble = blend_probabilities({"poisson": components["Poisson"], "dixon_coles": components["Dixon-Coles"], "elo": components["Elo"]}, {"poisson": pw, "dixon_coles": dw, "elo": ew})
+                components["Ensemble"] = ensemble
+                st.session_state["v4_ensemble"] = {"home": home, "away": away, "lh": lh, "la": la, "source": source, "components": components}
+            except Exception as exc:
+                st.error(f"Ensemble calculation failed: {exc}")
+        forecast = st.session_state.get("v4_ensemble")
+        if forecast:
+            st.write(f"{forecast['home']} vs {forecast['away']} • Expected goals {forecast['lh']:.2f}–{forecast['la']:.2f} • Source: {forecast['source']}")
+            table = [{"Model": name, "Home": p["home"], "Draw": p["draw"], "Away": p["away"]} for name, p in forecast["components"].items()]
+            st.dataframe(pd.DataFrame(table).set_index("Model").style.format("{:.1%}"), use_container_width=True)
+            st.caption("Weights are user-selected starting weights, not fitted or validated weights. Optimize only with out-of-fold predictions.")
+    else:
+        st.info("Import match history first to preview the ensemble.")
+
+    st.markdown("#### Fit ensemble weights from out-of-fold predictions")
+    st.caption("CSV needs outcome plus 9 columns: poisson_home_p/draw_p/away_p, dixon_coles_home_p/draw_p/away_p, elo_home_p/draw_p/away_p. Use predictions generated strictly out of fold.")
+    weight_file = st.file_uploader("Upload OOF component predictions", type=["csv"], key="v4_weights")
+    if weight_file:
+        try:
+            wf = pd.read_csv(weight_file)
+            component_columns = {
+                "poisson":["poisson_home_p","poisson_draw_p","poisson_away_p"],
+                "dixon_coles":["dixon_coles_home_p","dixon_coles_draw_p","dixon_coles_away_p"],
+                "elo":["elo_home_p","elo_draw_p","elo_away_p"],
+            }
+            required_weight = {"outcome"} | {c for cols in component_columns.values() for c in cols}
+            if not required_weight.issubset(wf.columns):
+                raise ValueError("Missing outcome or component probability columns.")
+            if st.button("Fit non-negative ensemble weights"):
+                oof = {name:wf[cols].to_numpy(dtype=float) for name,cols in component_columns.items()}
+                fitted = fit_ensemble_weights(oof,wf.outcome.to_numpy(dtype=int),min_samples=100)
+                st.session_state["v4_fitted_weights"] = fitted
+                st.success("OOF ensemble weights fitted and saved for this dashboard session.")
+            if st.session_state.get("v4_fitted_weights"):
+                st.dataframe(pd.DataFrame([st.session_state["v4_fitted_weights"]],index=["Fitted weights"]),use_container_width=True)
+        except Exception as exc:
+            st.error(f"OOF weight fitting rejected: {exc}")
+
+    st.divider()
+    st.markdown("### 2. Chronological probability calibration")
+    st.write("Upload out-of-fold 1X2 predictions. Oldest 70% fits temperature; newest 30% is held out.")
+    st.caption("Required: date, outcome (0=home, 1=draw, 2=away), model_home_p, model_draw_p, model_away_p.")
+    cal_file = st.file_uploader("Upload calibration CSV", type=["csv"], key="v4_calibration")
+    if cal_file:
+        try:
+            cal = pd.read_csv(cal_file)
+            needed = {"date", "outcome", "model_home_p", "model_draw_p", "model_away_p"}
+            if not needed.issubset(cal.columns):
+                raise ValueError("Missing required calibration columns.")
+            cal["date"] = pd.to_datetime(cal.date, errors="coerce", utc=True)
+            cal["outcome"] = pd.to_numeric(cal.outcome, errors="coerce")
+            cal = cal.dropna(subset=["date", "outcome"]).sort_values("date").reset_index(drop=True)
+            cut = int(len(cal) * 0.70)
+            if cut < 50 or len(cal) - cut < 20:
+                raise ValueError("Need at least 50 older calibration fixtures and 20 newer holdout fixtures.")
+            cols = ["model_home_p", "model_draw_p", "model_away_p"]
+            train_p, train_y = cal.loc[:cut-1, cols].to_numpy(float), cal.loc[:cut-1, "outcome"].to_numpy(int)
+            test_p, test_y = cal.loc[cut:, cols].to_numpy(float), cal.loc[cut:, "outcome"].to_numpy(int)
+            fitted = fit_temperature(train_p, train_y, min_samples=50)
+            calibrated = apply_temperature(test_p, fitted["temperature"])
+            before, after = calibration_report(test_p, test_y), calibration_report(calibrated, test_y)
+            a, b, c = st.columns(3)
+            a.metric("Temperature", f"{fitted['temperature']:.3f}")
+            b.metric("Holdout log loss", f"{before['log_loss']:.4f} → {after['log_loss']:.4f}")
+            c.metric("Holdout ECE", f"{before['ece']:.4f} → {after['ece']:.4f}")
+            st.dataframe(pd.DataFrame([
+                {"Metric": "Brier", "Before": before["brier"], "After": after["brier"]},
+                {"Metric": "Log loss", "Before": before["log_loss"], "After": after["log_loss"]},
+                {"Metric": "ECE", "Before": before["ece"], "After": after["ece"]},
+            ]), use_container_width=True)
+            out = cal.loc[cut:].copy()
+            out[["calibrated_home_p", "calibrated_draw_p", "calibrated_away_p"]] = calibrated
+            st.download_button("Download calibrated holdout", out.to_csv(index=False), "football_quant_lab_calibrated_holdout.csv", mime="text/csv")
+            st.caption("Temperature is fitted on the older split only. Metrics use the untouched newer holdout. Do not tune on that holdout afterward.")
+        except Exception as exc:
+            st.error(f"Calibration upload rejected: {exc}")
+
+    st.divider()
+    st.markdown("### 3. Conservative 1X2 market scanner")
+    st.write("Lower probability columns must be genuine lower confidence bounds from out-of-sample/bootstrap analysis. The scanner never invents uncertainty.")
+    st.caption("Required: match_id, home_odds, draw_odds, away_odds, model_home_p, model_draw_p, model_away_p, lower_home_p, lower_draw_p, lower_away_p. Optional: league.")
+    scan_file = st.file_uploader("Upload fixtures and bookmaker odds CSV", type=["csv"], key="v4_scan")
+    if scan_file:
+        try:
+            scan_df = pd.read_csv(scan_file)
+            edge_threshold = st.slider("Minimum edge vs no-vig market", 0.0, 0.15, 0.02, 0.005, key="v4_edge")
+            ev_threshold = st.slider("Minimum conservative EV", 0.0, 0.10, 0.0, 0.005, key="v4_ev")
+            max_margin = st.slider("Maximum bookmaker overround", 0.0, 0.30, 0.15, 0.01, key="v4_margin")
+            if st.button("Scan value candidates", type="primary"):
+                st.session_state["v4_scan_results"] = scan_1x2_market(scan_df, min_edge=edge_threshold, min_conservative_ev=ev_threshold, max_overround=max_margin)
+            ranked = st.session_state.get("v4_scan_results")
+            if ranked is not None:
+                candidates = ranked[ranked.status == "VALUE CANDIDATE"]
+                a, b = st.columns(2)
+                a.metric("Fixtures scanned", ranked.match_id.nunique())
+                b.metric("Qualified selections", len(candidates))
+                st.dataframe(ranked, use_container_width=True)
+                st.download_button("Download scanner report", ranked.to_csv(index=False), "football_quant_lab_v4_market_scan.csv", mime="text/csv")
+                if candidates.empty:
+                    st.warning("NO VALUE = NO BET. No selection passed all conservative filters.")
+        except Exception as exc:
+            st.error(f"Scanner upload rejected: {exc}")
 
 elif page in ("Match Analysis", "Probability Explorer", "Odds Intelligence", "Value Bet Scanner"):
     st.subheader(page)
