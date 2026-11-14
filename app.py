@@ -135,6 +135,34 @@ elif page in ("Match Analysis", "Probability Explorer", "Odds Intelligence", "Va
             f.metric("BTTS Yes", f"{p.btts_yes:.1%}")
             st.write("Most likely correct scores")
             st.dataframe(pd.DataFrame(top_correct_scores(p.score_matrix)), use_container_width=True)
+            st.markdown("#### Lock this pre-match model snapshot")
+            with st.form("analysis_prediction_form"):
+                record_id = st.text_input("Unique Match ID")
+                kickoff_date = st.date_input("Kickoff date (Asia/Jakarta)")
+                kickoff_time = st.time_input("Kickoff time (Asia/Jakarta)", value=dt_time(19, 0))
+                chosen_market = st.selectbox("Market", ["NO BET","1X2 Home","1X2 Draw","1X2 Away","Over 1.5","Under 1.5","Over 2.5","Under 2.5","Over 3.5","Under 3.5","BTTS Yes","BTTS No"])
+                record_odds = st.number_input("Decimal odds (used only when market selected)", min_value=1.01, value=2.0, step=0.01)
+                record_stake = st.number_input("Stake (0 for NO BET)", min_value=0.0, value=0.0)
+                lock = st.form_submit_button("Save immutable prediction snapshot")
+            if lock:
+                try:
+                    kickoff = datetime.combine(kickoff_date, kickoff_time).replace(tzinfo=ZoneInfo("Asia/Jakarta")).isoformat()
+                    if chosen_market == "NO BET":
+                        selected, odds_value, ev_value, stake_value = None, None, None, 0.0
+                    else:
+                        model_p = market_probability(chosen_market, p)
+                        calculated_ev = model_p * record_odds - 1.0
+                        if calculated_ev <= 0 or record_stake <= 0:
+                            raise ValueError("NO VALUE = NO BET. Positive raw EV and a positive stake are required to record a selected market.")
+                        selected, odds_value, ev_value, stake_value = chosen_market, record_odds, calculated_ev, record_stake
+                    record = save_prediction(record_id, kickoff, home, away, p.as_dict(),
+                                              selected, odds_value, ev_value, "1.0.0",
+                                              stake_value, DB_PATH)
+                    st.success(f"Prediction locked as record #{record}.")
+                except Exception as exc:
+                    st.error(str(exc))
+            st.caption("Snapshot stores calculated probabilities. The estimator remains provisional and uncalibrated; raw EV alone is not a production-grade betting signal.")
+
             st.markdown("#### Asian handicap probabilities (home handicap)")
             ah_line = st.selectbox("Home handicap line", [-2.0,-1.75,-1.5,-1.25,-1.0,-0.75,-0.5,-0.25,0.0,0.25,0.5,0.75,1.0,1.25,1.5,1.75,2.0], index=8)
             ah = asian_handicap_outcomes(p.score_matrix, ah_line)
@@ -163,33 +191,6 @@ elif page == "Risk Management":
 
 elif page == "Prediction Tracker":
     st.subheader("Prediction Tracker")
-    st.markdown("#### Save a pre-match prediction")
-    if matches.empty:
-        st.info("Import match history first. You can still save a prediction only when its teams and kickoff are explicitly known.")
-    with st.form("save_prediction_form"):
-        match_id = st.text_input("Unique Match ID")
-        home_team = st.text_input("Home team")
-        away_team = st.text_input("Away team")
-        kickoff_date = st.date_input("Kickoff date (Asia/Jakarta)")\n        kickoff_time = st.time_input("Kickoff time (Asia/Jakarta)", value=dt_time(19, 0))
-        market = st.selectbox("Selected market (choose NO BET if no qualifying value)", ["NO BET","1X2 Home","1X2 Draw","1X2 Away","Over 1.5","Under 1.5","Over 2.5","Under 2.5","Over 3.5","Under 3.5","BTTS Yes","BTTS No"])
-        odds_input = st.number_input("Odds (1.01 if NO BET)", min_value=1.01, value=1.01, step=0.01)
-        ev_input = st.number_input("Estimated EV (decimal; 0 if NO BET)", value=0.0, step=0.01)
-        stake_input = st.number_input("Stake amount (0 for NO BET)", min_value=0.0, value=0.0)
-        submitted = st.form_submit_button("Lock prediction")
-    if submitted:
-        try:
-            if market != "NO BET" and (ev_input <= 0 or stake_input <= 0):
-                raise ValueError("Selected market requires positive EV and stake. Otherwise choose NO BET.")
-            if market == "NO BET":
-                market_value, odds_value, ev_value, stake_value = None, None, None, 0.0
-            else:
-                market_value, odds_value, ev_value, stake_value = market, odds_input, ev_input, stake_input
-            kickoff = datetime.combine(kickoff_date, kickoff_time).replace(tzinfo=ZoneInfo("Asia/Jakarta")).isoformat()
-            pid = save_prediction(match_id,kickoff,home_team,away_team,{"model_status":"provisional"},
-                                  market_value,odds_value,ev_value,"1.0.0",stake_value,DB_PATH)
-            st.success(f"Prediction locked. Record ID: {pid}")
-        except Exception as exc:
-            st.error(str(exc))
     st.markdown("#### Settle completed match")
     open_preds = preds[preds.actual_home_goals.isna()] if not preds.empty else pd.DataFrame()
     if not open_preds.empty:
@@ -212,7 +213,7 @@ elif page == "Prediction Tracker":
                 st.rerun()
             except Exception as exc:
                 st.error(str(exc))
-    st.dataframe(list_predictions(DB_PATH), use_container_width=True)
+    st.dataframe(list_predictions(DB_PATH), use_container_width=True) if not preds.empty else st.info("No prediction snapshots saved yet.")
 
 elif page == "Model Performance":
     st.subheader("Model Performance")
