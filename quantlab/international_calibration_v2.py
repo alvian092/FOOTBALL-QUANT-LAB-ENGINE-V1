@@ -56,21 +56,36 @@ def _metrics(p: np.ndarray, y: np.ndarray) -> dict:
     }
 
 
-def _date_cluster_ci(frame: pd.DataFrame, probs: np.ndarray, samples: int, seed: int) -> dict:
+def _paired_date_cluster_ci(frame: pd.DataFrame, raw_probs: np.ndarray,
+                            calibrated_probs: np.ndarray, samples: int, seed: int) -> dict:
+    """Fixture-weighted paired bootstrap resampling whole match dates."""
     if frame.empty or samples < 1:
-        return {"brier": None, "log_loss": None}
-    work = frame[["date", "outcome"]].copy()
-    work["brier"] = np.square(probs - np.eye(3)[work.outcome.to_numpy(dtype=int)]).sum(axis=1)
-    work["log_loss"] = -np.log(np.clip(probs[np.arange(len(work)), work.outcome.to_numpy(dtype=int)], 1e-15, 1))
-    daily = work.groupby("date")[["brier", "log_loss"]].mean().to_numpy()
+        return {}
+    y = frame.outcome.to_numpy(dtype=int)
+    onehot = np.eye(3)[y]
+    rows = pd.DataFrame({
+        "date": pd.to_datetime(frame.date, utc=True).dt.strftime("%Y-%m-%d"),
+        "count": 1,
+        "brier_raw": np.square(raw_probs - onehot).sum(axis=1),
+        "brier_calibrated": np.square(calibrated_probs - onehot).sum(axis=1),
+        "log_loss_raw": -np.log(np.clip(raw_probs[np.arange(len(y)), y], 1e-15, 1)),
+        "log_loss_calibrated": -np.log(np.clip(calibrated_probs[np.arange(len(y)), y], 1e-15, 1)),
+    })
+    daily = rows.groupby("date").sum(numeric_only=True).to_numpy(dtype=float)
     rng = np.random.default_rng(seed)
     draws = rng.integers(0, len(daily), size=(samples, len(daily)))
-    result = {}
-    for j, name in enumerate(("brier", "log_loss")):
-        boot = daily[draws, j].mean(axis=1)
-        lo, hi = np.quantile(boot, [0.025, 0.975])
-        result[name] = [float(lo), float(hi)]
-    return result
+    boot_sum = daily[draws].sum(axis=1)
+    n = boot_sum[:, 0]
+    values = {
+        "raw_brier": boot_sum[:, 1] / n,
+        "calibrated_brier": boot_sum[:, 2] / n,
+        "raw_log_loss": boot_sum[:, 3] / n,
+        "calibrated_log_loss": boot_sum[:, 4] / n,
+    }
+    values["brier_difference_calibrated_minus_raw"] = values["calibrated_brier"] - values["raw_brier"]
+    values["log_loss_difference_calibrated_minus_raw"] = values["calibrated_log_loss"] - values["raw_log_loss"]
+    return {name: [float(x) for x in np.quantile(draws_, [0.025, 0.975])]
+            for name, draws_ in values.items()}
 
 
 def _prequential(frame: pd.DataFrame, min_history: int, min_category_history: int,
@@ -149,15 +164,28 @@ def run_experiments(predictions: pd.DataFrame, bootstrap_samples: int = 2000) ->
     eval_probs = chosen[valid]
     eval_y = y[valid]
     temporal = {}
-    for year, group in eval_frame.groupby(eval_frame.date.dt.year):
-        positions = np.flatnonzero(eval_frame.date.dt.year.to_numpy() == year)
-        temporal[str(year)] = _metrics(eval_probs[positions], eval_y[positions])
+    eval_raw = raw[valid]
+    years = eval_frame.date.dt.year.to_numpy()
+    for year in sorted(np.unique(years)):
+        mask = years == year
+        yearly = eval_frame.loc[mask].copy()
+        temporal[str(year)] = {
+            "raw": _metrics(eval_raw[mask], eval_y[mask]),
+            "calibrated": _metrics(eval_probs[mask], eval_y[mask]),
+            "paired_date_cluster_bootstrap_ci_95": _paired_date_cluster_ci(
+                yearly, eval_raw[mask], eval_probs[mask], bootstrap_samples, 20261115 + int(year)
+            ) if int(mask.sum()) >= 100 else None,
+        }
     segments = {}
     for category in CLASSES:
         mask = eval_frame.competition_class.to_numpy() == category
+        category_frame = eval_frame.loc[mask].copy()
         segments[category] = {
-            "raw": _metrics(raw[valid][mask], eval_y[mask]),
+            "raw": _metrics(eval_raw[mask], eval_y[mask]),
             "calibrated": _metrics(eval_probs[mask], eval_y[mask]),
+            "paired_date_cluster_bootstrap_ci_95": _paired_date_cluster_ci(
+                category_frame, eval_raw[mask], eval_probs[mask], bootstrap_samples, 20261115 + len(category)
+            ),
             "n": int(mask.sum()),
         }
     summary = {
@@ -166,15 +194,17 @@ def run_experiments(predictions: pd.DataFrame, bootstrap_samples: int = 2000) ->
         "default_configuration_predeclared": True,
         "calibrated_rows": int(valid.sum()),
         "segments": segments,
-        "overall": {"raw": _metrics(raw[valid], eval_y), "calibrated": _metrics(eval_probs, eval_y),
-                    "calibrated_cluster_bootstrap_ci_95": _date_cluster_ci(eval_frame, eval_probs, bootstrap_samples, 20261115)},
+        "overall": {"raw": _metrics(eval_raw, eval_y), "calibrated": _metrics(eval_probs, eval_y),
+                    "paired_date_cluster_bootstrap_ci_95": _paired_date_cluster_ci(
+                        eval_frame, eval_raw, eval_probs, bootstrap_samples, 20261115
+                    )},
         "by_calendar_year": temporal,
         "sensitivity_grid": reports,
         "caveats": [
             "All calibration fits use only outcomes from strictly earlier dates; same-day fixtures share pre-date parameters.",
             "The default is pre-declared, not chosen by minimizing metrics on this evaluation period.",
             "Sensitivity-grid metrics are diagnostic only and must not be used to select and report an in-sample winner.",
-            "Date-cluster intervals account for same-day fixture clustering but not all serial dependence or model-selection uncertainty."
+            "Paired date-cluster bootstrap resamples full match dates and weights fixtures equally; intervals do not correct for all serial dependence or model-selection uncertainty."
         ]
     }
     return frame, summary
