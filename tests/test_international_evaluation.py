@@ -43,9 +43,10 @@ def test_prequential_calibration_does_not_calibrate_before_warmup():
     predictions, summary = evaluate_international_predictions(
         _predictions(40), min_calibration_history=10, refit_every_dates=2
     )
-    assert predictions["model_intl_calibrated_home_p"].notna().all()
-    assert predictions["calibration_temperature"].notna().all()
-    assert summary["calibrated_predictions"] == 40
+    assert predictions["model_intl_calibrated_home_p"].iloc[:10].isna().all()
+    assert predictions["model_intl_calibrated_home_p"].iloc[10:].notna().all()
+    assert predictions["calibration_temperature"].iloc[:10].isna().all()
+    assert summary["calibrated_predictions"] == 30
     assert "friendly" in summary["segments"]["competition_class"]
     assert "qualification" in summary["segments"]["competition_class"]
     assert "tournament" in summary["segments"]["competition_class"]
