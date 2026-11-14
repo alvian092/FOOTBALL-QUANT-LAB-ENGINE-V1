@@ -1,6 +1,7 @@
 from __future__ import annotations
 import hashlib
 import json
+import tempfile
 from datetime import datetime, timezone, time as dt_time
 from pathlib import Path
 from zoneinfo import ZoneInfo
@@ -8,14 +9,14 @@ from zoneinfo import ZoneInfo
 import pandas as pd
 import streamlit as st
 
-from quantlab.data import validate_matches_csv, recent_team_stats
+from quantlab.data import validate_matches_csv, team_form_stats, venue_stats
 from quantlab.probability import calculate_probabilities, estimate_expected_goals, top_correct_scores
 from quantlab.market import evaluate_value, no_vig_probabilities, overround
 from quantlab.asian_handicap import asian_handicap_outcomes, asian_handicap_ev
 from quantlab.storage import (initialize, load_matches, save_dataset, save_prediction,
-                              list_predictions, settle_prediction, list_datasets)
+                              list_predictions, settle_prediction, list_datasets, record_closing_odds, backup_database, restore_database)
 from quantlab.risk import flat_stake
-from quantlab.evaluation import brier_score, log_loss
+from quantlab.evaluation import brier_score, log_loss, backtest_summary, calibration_bins, bankroll_metrics
 
 st.set_page_config(page_title="Football Quant Lab", page_icon="⚽", layout="wide")
 DB_PATH = Path("data/football_quant_lab.sqlite3")
@@ -26,6 +27,11 @@ st.markdown("""
 .stApp {background: #0b1220; color: #e5e7eb;}
 [data-testid="stMetric"] {background: #111c2e; padding: 14px; border-radius: 10px;}
 [data-testid="stSidebar"] {background: #101a2b;}
+@media (max-width: 768px) {
+  .block-container {padding-left: 0.85rem; padding-right: 0.85rem;}
+  [data-testid="stMetric"] {padding: 9px; margin-bottom: 6px;}
+  [data-testid="stDataFrame"] {overflow-x: auto;}
+}
 </style>
 """, unsafe_allow_html=True)
 
@@ -33,7 +39,7 @@ st.title("⚽ FOOTBALL QUANT LAB")
 st.caption("Quantitative football analysis • Probability • Market intelligence • Risk control")
 page = st.sidebar.radio("NAVIGATION", ["Dashboard Overview", "Match Analysis", "Probability Explorer",
     "Odds Intelligence", "Value Bet Scanner", "Risk Management", "Prediction Tracker",
-    "Model Performance", "CSV Data Management", "Settings"])
+    "Model Performance", "CSV Data Management", "Backup & Restore", "Settings"])
 
 matches = load_matches(DB_PATH)
 preds = list_predictions(DB_PATH)
@@ -73,7 +79,7 @@ if page == "Dashboard Overview":
 
 elif page == "CSV Data Management":
     st.subheader("CSV Data Management")
-    st.write("Required: date, home_team, away_team, home_goals, away_goals. Optional: match_id.")
+    st.write("Required: date, home_team, away_team, home_goals, away_goals. Optional: match_id, home_xg, away_xg (provide both for xG-based analysis).")
     uploaded = st.file_uploader("Upload match history CSV", type=["csv"])
     if uploaded:
         raw = uploaded.getvalue()
@@ -106,25 +112,41 @@ elif page in ("Match Analysis", "Probability Explorer", "Odds Intelligence", "Va
         home = c1.selectbox("Home team", teams)
         away = c2.selectbox("Away team", [t for t in teams if t != home])
         history_limit = st.slider("Recent matches per team", 5, 20, 10)
+        recency_half_life = st.slider("Recency half-life (matches)", 2, 10, 5)
         if st.button("Calculate probabilities", type="primary"):
             try:
-                hs, aws = recent_team_stats(matches, home, history_limit), recent_team_stats(matches, away, history_limit)
+                hs = venue_stats(matches, home, "home", history_limit, recency_half_life)
+                aws = venue_stats(matches, away, "away", history_limit, recency_half_life)
                 if min(hs["matches"], aws["matches"]) < 5:
-                    raise ValueError("Insufficient history: each team needs at least 5 recorded matches.")
-                league_home = float(matches.home_goals.mean())
-                league_away = float(matches.away_goals.mean())
-                lh, la = estimate_expected_goals(hs["scored_per_match"], hs["conceded_per_match"],
-                    aws["scored_per_match"], aws["conceded_per_match"], league_home, league_away)
+                    raise ValueError("Insufficient venue history: home team needs 5 home matches and away team needs 5 away matches.")
+                has_xg = hs["xg_for"] is not None and aws["xg_for"] is not None
+                if has_xg:
+                    league_home, league_away = float(matches.home_xg.mean()), float(matches.away_xg.mean())
+                    home_attack, home_defence = hs["xg_for"], hs["xg_against"]
+                    away_attack, away_defence = aws["xg_for"], aws["xg_against"]
+                else:
+                    league_home, league_away = float(matches.home_goals.mean()), float(matches.away_goals.mean())
+                    home_attack, home_defence = hs["scored_per_match"], hs["conceded_per_match"]
+                    away_attack, away_defence = aws["scored_per_match"], aws["conceded_per_match"]
+                lh, la = estimate_expected_goals(home_attack, home_defence, away_attack, away_defence, league_home, league_away)
                 p = calculate_probabilities(lh, la)
                 st.session_state["last_analysis"] = {"home":home,"away":away,"lh":lh,"la":la,"p":p,
-                    "home_matches":hs["matches"],"away_matches":aws["matches"]}
+                    "home_matches":hs["matches"],"away_matches":aws["matches"],"has_xg":has_xg,
+                    "home_gf":hs["scored_per_match"],"home_ga":hs["conceded_per_match"],
+                    "away_gf":aws["scored_per_match"],"away_ga":aws["conceded_per_match"],
+                    "home_xgf":hs["xg_for"],"home_xga":hs["xg_against"],
+                    "away_xgf":aws["xg_for"],"away_xga":aws["xg_against"],"half_life":recency_half_life}
             except Exception as exc:
                 st.error(str(exc))
         result = st.session_state.get("last_analysis")
         if result and result["home"] == home and result["away"] == away:
             p = result["p"]
             st.write(f"Expected goals: **{home} {result['lh']:.2f} — {result['la']:.2f} {away}**")
-            st.caption(f"Historical-goals baseline • {int(result['home_matches'])} home-team matches • {int(result['away_matches'])} away-team matches. These are goals-derived lambdas, not xG.")
+            st.caption(("xG/xGA venue model" if result["has_xg"] else "Goals-based venue model (xG columns absent)") + f" • {int(result['home_matches'])} home matches for {home} • {int(result['away_matches'])} away matches for {away} • recency half-life {result['half_life']} matches.")
+            if result["has_xg"]:
+                st.write(f"Venue xG/xGA: {home} {result['home_xgf']:.2f}/{result['home_xga']:.2f} • {away} {result['away_xgf']:.2f}/{result['away_xga']:.2f}")
+            else:
+                st.write(f"Venue GF/GA: {home} {result['home_gf']:.2f}/{result['home_ga']:.2f} • {away} {result['away_gf']:.2f}/{result['away_ga']:.2f}")
             a,b,c = st.columns(3)
             a.metric("Home win", f"{p.home_win:.1%}")
             b.metric("Draw", f"{p.draw:.1%}")
@@ -195,6 +217,18 @@ elif page == "Prediction Tracker":
     open_preds = preds[preds.actual_home_goals.isna()] if not preds.empty else pd.DataFrame()
     if not open_preds.empty:
         choices = {f"#{int(r.id)} {r.home_team} vs {r.away_team}":int(r.id) for r in open_preds.itertuples()}
+        odds_choices = {k:v for k,v in choices.items() if open_preds.loc[open_preds.id == v,"selected_market"].iloc[0]}
+        if odds_choices:
+            with st.form("closing_odds_form"):
+                closing_label = st.selectbox("Record closing odds for",list(odds_choices))
+                closing_value = st.number_input("Closing decimal odds",min_value=1.01,value=2.00,step=0.01)
+                save_close = st.form_submit_button("Save closing odds")
+            if save_close:
+                try:
+                    record_closing_odds(odds_choices[closing_label],closing_value,DB_PATH)
+                    st.success("Closing odds saved.")
+                    st.rerun()
+                except Exception as exc: st.error(str(exc))
         with st.form("settle_prediction_form"):
             selected = st.selectbox("Prediction record", list(choices))
             hg = st.number_input("Actual home goals", min_value=0, step=1)
@@ -216,22 +250,74 @@ elif page == "Prediction Tracker":
     st.dataframe(list_predictions(DB_PATH), use_container_width=True) if not preds.empty else st.info("No prediction snapshots saved yet.")
 
 elif page == "Model Performance":
-    st.subheader("Model Performance")
-    settled = preds[preds.actual_home_goals.notna()] if not preds.empty else pd.DataFrame()
+    st.subheader("Model Performance — actual settled records")
+    settled = preds[preds.actual_home_goals.notna()].copy() if not preds.empty else pd.DataFrame()
+    bets = settled[settled.selected_market.notna()].copy() if not settled.empty else pd.DataFrame()
     c1,c2,c3 = st.columns(3)
     c1.metric("Total predictions",len(preds))
     c2.metric("Settled",len(settled))
-    c3.metric("Win rate", "N/A" if settled.empty else f"{sum((r.simulated_profit or 0)>0 for r in settled.itertuples())/len(settled):.1%}")
+    c3.metric("Settled bets",len(bets))
+    if not bets.empty:
+        metrics = bankroll_metrics(bets.simulated_profit.astype(float).to_numpy(), bets.stake.astype(float).to_numpy())
+        m1,m2,m3,m4 = st.columns(4)
+        m1.metric("Net P/L",f"{metrics['net_profit']:.2f}")
+        m2.metric("ROI / Yield","N/A" if metrics["roi"] is None else f"{metrics['roi']:.2%}")
+        m3.metric("Max drawdown",f"{metrics['max_drawdown']:.2f}")
+        m4.metric("Max drawdown %","N/A" if metrics["max_drawdown_pct"] is None else f"{metrics['max_drawdown_pct']:.1%}")
+        clv_rows = bets[bets.closing_odds.notna() & bets.odds.notna()]
+        if not clv_rows.empty:
+            clv = bankroll_metrics(clv_rows.simulated_profit.astype(float),clv_rows.stake.astype(float),
+                clv_rows.odds.astype(float),clv_rows.closing_odds.astype(float))["clv"]
+            st.metric("Average CLV",f"{clv:.2%}")
+        else:
+            st.caption("CLV belum tersedia: catat closing odds sebelum kickoff pada Prediction Tracker.")
+    else:
+        st.info("Belum ada taruhan settled dengan stake aktual. ROI/yield tidak dihitung dari prediksi NO BET.")
     if not settled.empty:
-        st.metric("Net simulated P/L",f"{settled.simulated_profit.sum():.2f}")
-        st.caption("ROI/CLV and calibration metrics are withheld until full odds snapshots, explicit stake records, and model probability payloads are recorded consistently. Win rate alone does not establish model edge.")
+        home_probs, home_outcomes = [], []
+        for r in settled.itertuples():
+            try:
+                probs = json.loads(r.probabilities_json)
+                home_probs.append(float(probs["home_win"]))
+                home_outcomes.append(int(r.actual_home_goals > r.actual_away_goals))
+            except (ValueError, KeyError, TypeError):
+                continue
+        if home_probs:
+            report = backtest_summary(home_probs,home_outcomes)
+            st.markdown("#### Out-of-sample home-win calibration")
+            a,b,c = st.columns(3)
+            a.metric("Brier score",f"{report['brier']:.4f}")
+            b.metric("95% bootstrap CI",f"{report['brier_ci_low']:.4f}–{report['brier_ci_high']:.4f}")
+            c.metric("Home-win hit rate",f"{report['hit_rate']:.1%}")
+            st.dataframe(pd.DataFrame(calibration_bins(home_probs,home_outcomes)),use_container_width=True)
+            st.caption(f"Based on {report['n']} settled prediction snapshots. Bootstrap CI is a sample-uncertainty interval, not a guarantee of future performance.")
         st.dataframe(settled,use_container_width=True)
     else:
         st.info("No settled predictions yet. Metrics are not fabricated.")
 
+elif page == "Backup & Restore":
+    st.subheader("Database Backup & Restore")
+    st.warning("Restore replaces the current database. Download a backup first; never restore an untrusted file.")
+    if DB_PATH.exists():
+        snapshot = backup_database(DB_PATH)
+        st.download_button("Download consistent SQLite backup",snapshot.read_bytes(),
+            "football_quant_lab_backup.sqlite3",mime="application/octet-stream")
+    restore_file = st.file_uploader("Select a Football Quant Lab SQLite backup",type=["sqlite3","sqlite","db"])
+    if restore_file and st.button("Validate and restore database",type="primary"):
+        try:
+            with tempfile.NamedTemporaryFile(suffix=".sqlite3",delete=False) as tmp:
+                tmp.write(restore_file.getvalue()); temp_path=Path(tmp.name)
+            restore_database(temp_path,DB_PATH)
+            temp_path.unlink(missing_ok=True)
+            st.success("Database restored successfully.")
+            st.rerun()
+        except Exception as exc:
+            st.error(f"Restore rejected: {exc}")
+
 elif page == "Settings":
-    st.subheader("Settings")
-    st.write("Model version: 1.0.0")
+    st.subheader("Settings & Android deployment")
+    st.write("Model version: 2.0.0")
     st.write(f"Database: {DB_PATH}")
-    st.write("Data source: user-provided CSV. No live feed or fabricated statistics are used.")
-    st.warning("For hosted deployment, configure persistent disk storage for the SQLite database.")
+    st.write("Data source: user-provided match CSV. xG is only used when both home_xg and away_xg columns are present.")
+    st.info("Deploy this repository with Streamlit Community Cloud: create an app from the GitHub repository, select branch main and app.py, then open the generated HTTPS URL in Chrome on Android. Use Chrome → Add to Home screen for app-like access.")
+    st.warning("SQLite persistence on free ephemeral hosting is not guaranteed. Configure persistent storage or scheduled backups before relying on saved records.")
