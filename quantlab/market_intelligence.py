@@ -1,5 +1,6 @@
 """Historical bookmaker odds snapshots and market movement intelligence."""
 from __future__ import annotations
+import numpy as np
 import pandas as pd
 from .market import no_vig_probabilities
 
@@ -13,7 +14,7 @@ def validate_odds_snapshots(data: pd.DataFrame):
     df = data.copy()
     df["odds"] = pd.to_numeric(df.odds, errors="coerce")
     df["captured_at"] = pd.to_datetime(df.captured_at, errors="coerce", utc=True)
-    if df.odds.isna().any() or (df.odds <= 1).any():
+    if df.odds.isna().any() or not np.isfinite(df.odds).all() or (df.odds <= 1).any():
         raise ValueError("All decimal odds must be numeric and greater than 1.")
     if df.captured_at.isna().any():
         raise ValueError("All captured_at values must be valid timestamps.")
@@ -23,7 +24,15 @@ def validate_odds_snapshots(data: pd.DataFrame):
         df[col] = df[col].astype(str).str.strip()
     if "bookmaker" not in df.columns:
         df["bookmaker"] = "Unknown"
-    df["bookmaker"] = df.bookmaker.fillna("Unknown").astype(str)
+    df["bookmaker"] = df.bookmaker.fillna("Unknown").astype(str).str.strip()
+    if (df.bookmaker == "").any():
+        raise ValueError("bookmaker cannot be empty.")
+    unique_key = ["match_id","market","selection","bookmaker","captured_at"]
+    if df.duplicated(unique_key).any():
+        raise ValueError("Duplicate selection in the same timestamped bookmaker snapshot.")
+    group_key = ["match_id","market","bookmaker","captured_at"]
+    if (df.groupby(group_key).selection.nunique() < 2).any():
+        raise ValueError("Each timestamped market snapshot needs at least two selections.")
     return df
 
 
