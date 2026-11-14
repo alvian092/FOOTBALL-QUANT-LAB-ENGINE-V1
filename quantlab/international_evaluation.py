@@ -71,20 +71,21 @@ def _calibrate_prequential(frame: pd.DataFrame, min_history: int = 300,
     ordered_dates = sorted(out.date.unique())
     history_indices: list[int] = []
     temperature = 1.0
+    last_fit_date_index = None
     for date_index, day in enumerate(ordered_dates):
-        day_indices = np.flatnonzero(out.date.to_numpy() == date)
-        if len(history_indices) >= min_history and (
-            (date_index - next((i for i, d in enumerate(ordered_dates) if d == ordered_dates[0]), 0)) % refit_every_dates == 0
-        ):
-            temperature = _fit_temperature(raw[history_indices], y[history_indices])
-        logits = np.log(np.clip(raw[day_indices], 1e-12, 1.0)) / temperature
-        logits -= logits.max(axis=1, keepdims=True)
-        exp = np.exp(logits)
-        calibrated = exp / exp.sum(axis=1, keepdims=True)
-        out.loc[day_indices, "model_intl_calibrated_home_p"] = calibrated[:, 0]
-        out.loc[day_indices, "model_intl_calibrated_draw_p"] = calibrated[:, 1]
-        out.loc[day_indices, "model_intl_calibrated_away_p"] = calibrated[:, 2]
-        out.loc[day_indices, "calibration_temperature"] = temperature
+        day_indices = np.flatnonzero(out.date.to_numpy() == day)
+        if len(history_indices) >= min_history:
+            if last_fit_date_index is None or date_index - last_fit_date_index >= refit_every_dates:
+                temperature = _fit_temperature(raw[history_indices], y[history_indices])
+                last_fit_date_index = date_index
+            logits = np.log(np.clip(raw[day_indices], 1e-12, 1.0)) / temperature
+            logits -= logits.max(axis=1, keepdims=True)
+            exp = np.exp(logits)
+            calibrated = exp / exp.sum(axis=1, keepdims=True)
+            out.loc[day_indices, "model_intl_calibrated_home_p"] = calibrated[:, 0]
+            out.loc[day_indices, "model_intl_calibrated_draw_p"] = calibrated[:, 1]
+            out.loc[day_indices, "model_intl_calibrated_away_p"] = calibrated[:, 2]
+            out.loc[day_indices, "calibration_temperature"] = temperature
         history_indices.extend(day_indices.tolist())
     return out
 
