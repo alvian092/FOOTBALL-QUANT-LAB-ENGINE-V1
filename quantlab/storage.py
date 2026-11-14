@@ -47,8 +47,8 @@ def initialize(db_path=DEFAULT_DB):
         );
         """)
         mcols = {r[1] for r in conn.execute("PRAGMA table_info(matches)")}
-        for name in ("home_xg", "away_xg", "league"):
-            if name not in mcols: conn.execute(f"ALTER TABLE matches ADD COLUMN {name} REAL")
+        for name, declaration in (("home_xg","REAL"),("away_xg","REAL"),("league","TEXT")):
+            if name not in mcols: conn.execute(f"ALTER TABLE matches ADD COLUMN {name} {declaration}")
         pcols = {r[1] for r in conn.execute("PRAGMA table_info(predictions)")}
         for name, declaration in (("stake", "REAL NOT NULL DEFAULT 0"), ("closing_odds", "REAL")):
             if name not in pcols: conn.execute(f"ALTER TABLE predictions ADD COLUMN {name} {declaration}")
