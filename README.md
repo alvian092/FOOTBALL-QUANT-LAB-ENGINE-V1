@@ -120,7 +120,6 @@ The engine is a research and record-keeping tool, not a guaranteed-pick system o
 
 Never chase losses or use martingale staking. When data quality, calibration, or expected value is inadequate, the correct output is **NO BET**.
 
-
 ## V6 — International Football (senior men's)
 
 The separate international module is intentionally isolated from domestic club ratings. It uses the CC0-1.0 Mon Sport Info international-results CSV derived from martj42, filters to men's full internationals, and falls back to the CC0 `openfootball/internationals` mirror if the primary feed is unavailable. The current feed snapshot is updated 2026-07-20; the latest settled match parsed in the latest run was 2026-07-15. It is not an official FIFA data feed, and FIFA A-match status is not independently verified for every friendly.
