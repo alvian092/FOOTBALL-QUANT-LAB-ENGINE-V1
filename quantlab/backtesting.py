@@ -78,6 +78,7 @@ def walk_forward_backtest(matches: pd.DataFrame, predictor, min_train=100,
             "date": fixture.date, "match_id": fixture.get("match_id", None),
             "league": fixture.get("league", "Unknown"),
             "home_team": fixture.home_team, "away_team": fixture.away_team,
+            "training_matches": int(len(history)),
             "actual_home_goals": hg, "actual_away_goals": ag, "outcome": outcome,
             "model_home_p": model_p[0], "model_draw_p": model_p[1], "model_away_p": model_p[2],
         }
@@ -114,12 +115,22 @@ def walk_forward_backtest(matches: pd.DataFrame, predictor, min_train=100,
         model_common_ll = model_common_scores["log_loss"]
         edge_brier = market["brier"] - model_common_brier
         edge_ll = market["log_loss"] - model_common_ll
+        market_onehot = np.eye(3)[market_y]
+        model_brier_loss = np.sum((model_common - market_onehot)**2, axis=1)
+        market_brier_loss = np.sum((market_p - market_onehot)**2, axis=1)
+        model_log_loss = -np.log(np.clip(model_common[np.arange(len(market_y)), market_y], 1e-15, 1))
+        market_log_loss = -np.log(np.clip(market_p[np.arange(len(market_y)), market_y], 1e-15, 1))
+        edge_brier_ci = _bootstrap_mean_ci(market_brier_loss-model_brier_loss, bootstrap_samples, seed=44)
+        edge_log_loss_ci = _bootstrap_mean_ci(market_log_loss-model_log_loss, bootstrap_samples, seed=45)
     else:
         market, market_ci, edge_brier, edge_ll = _scores([], []), (None, None), None, None
+        edge_brier_ci, edge_log_loss_ci = (None, None), (None, None)
     return {"results": results, "model": model, "market": market,
             "model_brier_ci": model_ci, "market_brier_ci": market_ci,
             "model_edge_vs_market_brier": edge_brier,
-            "model_edge_vs_market_log_loss": edge_ll}
+            "model_edge_vs_market_log_loss": edge_ll,
+            "model_edge_brier_ci": edge_brier_ci,
+            "model_edge_log_loss_ci": edge_log_loss_ci}
 
 
 def segmented_performance(records: pd.DataFrame, group_by=("league", "selected_market"),
