@@ -25,19 +25,26 @@ def _losses(probabilities: np.ndarray, outcomes: np.ndarray):
     return brier, log_loss, accuracy
 
 
-def paired_cluster_bootstrap(elo_losses, ensemble_losses, dates: pd.Series,
-                             samples: int = 20_000, seed: int = 20261114) -> dict:
-    """Paired percentile bootstrap of Elo-minus-Ensemble losses, clustered by date."""
+def paired_cluster_bootstrap(
+    left_losses,
+    right_losses,
+    dates: pd.Series,
+    samples: int = 20_000,
+    seed: int = 20261114,
+    left_name: str = "Elo",
+    right_name: str = "Ensemble",
+) -> dict:
+    """Bootstrap paired left-minus-right loss differences by match date."""
     if samples < 1000:
         raise ValueError("Use at least 1,000 bootstrap samples.")
-    if (len(elo_losses[0]) != len(ensemble_losses[0])
-            or len(elo_losses[1]) != len(ensemble_losses[1])
-            or len(elo_losses[0]) != len(dates) or not len(dates)):
+    if (len(left_losses[0]) != len(right_losses[0])
+            or len(left_losses[1]) != len(right_losses[1])
+            or len(left_losses[0]) != len(dates) or not len(dates)):
         raise ValueError("Loss arrays and dates must have equal, non-zero lengths.")
     frame = pd.DataFrame({
         "date": pd.to_datetime(dates, utc=True).dt.strftime("%Y-%m-%d"),
-        "brier_diff": np.asarray(elo_losses[0]) - np.asarray(ensemble_losses[0]),
-        "log_loss_diff": np.asarray(elo_losses[1]) - np.asarray(ensemble_losses[1]),
+        "brier_diff": np.asarray(left_losses[0]) - np.asarray(right_losses[0]),
+        "log_loss_diff": np.asarray(left_losses[1]) - np.asarray(right_losses[1]),
     })
     grouped = frame.groupby("date", sort=True).agg(
         brier_sum=("brier_diff", "sum"),
@@ -54,26 +61,27 @@ def paired_cluster_bootstrap(elo_losses, ensemble_losses, dates: pd.Series,
         boot[i] = sums[selected].sum(axis=0) / counts[selected].sum()
 
     metrics = {}
-    for j, name in enumerate(("brier", "log_loss")):
+    for j, metric_name in enumerate(("brier", "log_loss")):
         low, high = np.quantile(boot[:, j], [0.025, 0.975])
         probability_nonnegative = (np.count_nonzero(boot[:, j] >= 0) + 1) / (samples + 1)
-        metrics[name] = {
-            "elo_minus_ensemble": float(observed[j]),
+        metrics[metric_name] = {
+            "left_minus_right": float(observed[j]),
             "ci_95_low": float(low),
             "ci_95_high": float(high),
             "bootstrap_probability_nonnegative": float(probability_nonnegative),
-            "elo_better": bool(high < 0),
+            "left_better": bool(high < 0),
         }
     return {
-        "method": "paired percentile bootstrap; calendar-date clusters; Elo minus Ensemble",
+        "method": f"paired percentile bootstrap; calendar-date clusters; {left_name} minus {right_name}",
+        "left_model": left_name,
+        "right_model": right_name,
         "samples": int(samples),
         "seed": int(seed),
         "clusters": int(len(counts)),
         "fixtures": int(counts.sum()),
         "metrics": metrics,
-        "interpretation": "Negative differences favor Elo. This is a cluster-bootstrap uncertainty interval, not a formal null-hypothesis p-value or evidence of betting profitability.",
+        "interpretation": f"Negative differences favor {left_name}. This is a cluster-bootstrap uncertainty interval, not a formal null-hypothesis p-value or evidence of betting profitability.",
     }
-
 
 def evaluate_predictions(predictions: pd.DataFrame, samples: int = 20_000,
                          seed: int = 20261114):
