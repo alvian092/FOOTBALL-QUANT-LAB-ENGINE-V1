@@ -1,0 +1,37 @@
+name: EPL V4 walk-forward pilot
+
+on:
+  pull_request:
+    paths:
+      - "data/epl_pilot/**"
+      - "quantlab/epl_backtest.py"
+      - "tests/test_epl_v4_backtest.py"
+      - ".github/workflows/epl-backtest.yml"
+      - "requirements.txt"
+  workflow_dispatch:
+
+jobs:
+  epl-backtest:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: "pip"
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+      - name: Run test suite
+        run: pytest -q
+      - name: Run EPL V4 walk-forward backtest
+        run: python -m quantlab.epl_backtest --input data/epl_pilot/epl_results_2010_2026.csv --output-dir artifacts/epl_v4_backtest --min-train 100 --bootstrap-samples 1000
+      - name: Upload EPL backtest report
+        uses: actions/upload-artifact@v4
+        with:
+          name: epl-v4-walk-forward-report
+          path: artifacts/epl_v4_backtest/
+          if-no-files-found: error
+          retention-days: 90
