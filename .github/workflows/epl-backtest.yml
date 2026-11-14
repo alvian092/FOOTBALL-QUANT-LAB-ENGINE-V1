@@ -1,0 +1,78 @@
+name: EPL and V5 cross-league validation
+
+on:
+  pull_request:
+    paths:
+      - "data/epl_pilot/**"
+      - "quantlab/**"
+      - "tests/**"
+      - ".github/workflows/epl-backtest.yml"
+      - "requirements.txt"
+  workflow_dispatch:
+
+jobs:
+  validation:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: "pip"
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+      - name: Run test suite
+        run: pytest -q
+      - name: Run EPL V4 walk-forward backtest
+        run: python -m quantlab.epl_backtest --input data/epl_pilot/epl_results_2010_2026.csv --output-dir artifacts/epl_v4_backtest --min-train 100 --bootstrap-samples 1000
+      - name: Run EPL paired robustness
+        run: python -m quantlab.epl_robustness --input artifacts/epl_v4_backtest/epl_v4_oos_predictions.csv --output-dir artifacts/epl_v4_robustness --bootstrap-samples 20000 --seed 20261114
+      - name: Run EPL calibration and OOF weights
+        run: python -m quantlab.epl_calibration --input artifacts/epl_v4_backtest/epl_v4_oos_predictions.csv --output-dir artifacts/epl_v4_calibration --min-history 300 --refit-every-dates 10 --bootstrap-samples 20000 --seed 20261114
+      - name: Fetch CC0 cross-league results
+        run: python -m quantlab.fetch_cross_league --output-dir data/cross_league --start-year 2010 --end-year 2026
+      - name: Run independent cross-league validation
+        run: |
+          python -m quantlab.cross_league \
+            --input bundesliga=data/cross_league/bundesliga.csv \
+            --input laliga=data/cross_league/laliga.csv \
+            --input seriea=data/cross_league/seriea.csv \
+            --input ligue1=data/cross_league/ligue1.csv \
+            --input eredivisie=data/cross_league/eredivisie.csv \
+            --output-dir artifacts/cross_league --min-train 100 --min-calibration-history 300
+      - name: Fetch CC-BY-4.0 market ledger
+        run: |
+          mkdir -p data/market
+          curl --fail --location --retry 3 \
+            https://raw.githubusercontent.com/tipsaudit/track-record-public/main/datasets/tipsaudit-predictions-all.csv \
+            --output data/market/tipsaudit-predictions-all.csv
+      - name: Evaluate raw adaptive model market performance
+        run: |
+          python -m quantlab.market_backtest \
+            --predictions artifacts/cross_league/cross_league_oos_predictions.csv \
+            --odds data/market/tipsaudit-predictions-all.csv \
+            --model-prefix model_adaptive --min-ev 0.03 \
+            --output-dir artifacts/market_intelligence_raw
+      - name: Evaluate calibrated adaptive model market performance
+        run: |
+          python -m quantlab.market_backtest \
+            --predictions artifacts/cross_league/cross_league_oos_predictions.csv \
+            --odds data/market/tipsaudit-predictions-all.csv \
+            --model-prefix model_adaptive_calibrated --min-ev 0.03 \
+            --output-dir artifacts/market_intelligence_calibrated
+      - name: Upload V5 evaluation reports
+        uses: actions/upload-artifact@v4
+        with:
+          name: football-quant-lab-v5-calibrated-market-validation
+          path: |
+            artifacts/epl_v4_backtest/
+            artifacts/epl_v4_robustness/
+            artifacts/epl_v4_calibration/
+            artifacts/cross_league/
+            artifacts/market_intelligence_raw/
+            artifacts/market_intelligence_calibrated/
+          if-no-files-found: error
+          retention-days: 90
