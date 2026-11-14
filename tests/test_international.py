@@ -3,6 +3,8 @@ import pytest
 
 from quantlab.international import (
     _tree_files,
+    _fetch_monsport_results,
+    _k_multiplier,
     parse_football_txt,
     run_international_backtest,
 )
@@ -65,3 +67,26 @@ def test_walk_forward_excludes_same_day_and_applies_friendly_discount():
 def test_walk_forward_rejects_missing_columns():
     with pytest.raises(ValueError, match="Missing required columns"):
         run_international_backtest(pd.DataFrame([{"date": "2020-01-01"}]))
+
+
+
+def test_monsport_feed_filters_men_and_preserves_neutral_venue(monkeypatch):
+    csv_text = """category,date,home,away,home_score,away_score,competition,city,country,neutral
+men,2026-06-11,Team A,Team B,2,1,FIFA World Cup,City,Country,True
+women,2026-06-12,Team C,Team D,1,0,Friendly,City,Country,False
+men,2026-06-13,Team E,Team F,0,0,Friendly,City,Country,False
+men,2027-01-01,Team G,Team H,1,0,Friendly,City,Country,False
+"""
+    monkeypatch.setattr("quantlab.international._read_url", lambda url: csv_text)
+    frame = _fetch_monsport_results(2000, 2026)
+    assert len(frame) == 2
+    assert set(frame.home_team) == {"Team A", "Team E"}
+    assert bool(frame.loc[frame.home_team == "Team A", "neutral"].iloc[0]) is True
+    assert frame.loc[frame.home_team == "Team E", "match_type"].iloc[0] == "friendly"
+
+
+def test_competition_multiplier_supports_source_labels():
+    assert _k_multiplier("Friendly") == 0.55
+    assert _k_multiplier("FIFA World Cup") == 1.25
+    assert _k_multiplier("UEFA EURO") == 1.2
+    assert _k_multiplier("FIFA World Cup qualification") == 1.0
