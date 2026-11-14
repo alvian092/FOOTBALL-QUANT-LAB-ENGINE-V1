@@ -146,3 +146,27 @@ python -m quantlab.international backtest --input data/international/senior_men.
 ```
 
 The first release is a results-only baseline. It reports multiclass Brier score, log loss, and accuracy; no ROI, yield, CLV, or betting edge is claimed without matched historical odds and a separate market backtest. Women's, youth, Olympic, and other non-senior competitions are out of scope for this phase and require separate source validation.
+
+
+### International evaluation: competition segments, calibration, odds and CLV
+
+The international workflow produces three separate evaluation layers:
+1. **Competition segments:** friendly, qualification, and tournament summaries, plus raw competition-folder breakdowns. Each reports sample size, multiclass Brier score, log loss, accuracy, and top-label ECE.
+2. **Prequential calibration:** expanding temperature scaling. A fixture date is calibrated only with forecasts and outcomes from earlier dates; same-day fixtures share the same pre-date calibrator. The first 300 OOS predictions are warm-up by default and are excluded from calibrated evaluation.
+3. **Market backtest:** the calibrated international probabilities are matched to the CC-BY-4.0 TipsAudit ledger and eligible Pinnacle pre-kickoff/closing prices. The report includes matched coverage, selected bets, flat-stake ROI/yield, hit rate, CLV, max drawdown, and model-versus-no-vig-market Brier/log loss.
+
+Run the evaluation locally:
+```bash
+python -m quantlab.international_evaluation \
+  --input artifacts/international_v1/international_oos_predictions.csv \
+  --output-dir artifacts/international_v1 \
+  --min-calibration-history 300 --refit-every-dates 10
+
+python -m quantlab.market_backtest \
+  --predictions artifacts/international_v1/international_calibrated_predictions.csv \
+  --odds data/market/tipsaudit-predictions-all.csv \
+  --model-prefix model_intl_calibrated --min-ev 0.03 \
+  --output-dir artifacts/international_market_intelligence
+```
+
+Market matching is restricted to the ledger's recorded fixtures and prices. The ledger is not a complete fixture-market census, and its recorded pre-kickoff price is not necessarily the bookmaker's true opening price. If no fixtures match, ROI/CLV are **not measurable**—they must not be reported as zero or interpreted as a loss-free strategy. Positive historical ROI or CLV is not proof of future profitability.
