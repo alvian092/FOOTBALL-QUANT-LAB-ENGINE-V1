@@ -119,3 +119,56 @@ python -m compileall -q app.py quantlab tests
 The engine is a research and record-keeping tool, not a guaranteed-pick system or financial advice. xG depends on user-supplied source quality. The current calibration report covers home-win probability only. CLV depends on accurate manually captured closing odds. ROI is meaningful only after a sufficiently large, representative sample of settled bets. No lineup/injury feed, live odds history, or automated data provider is bundled.
 
 Never chase losses or use martingale staking. When data quality, calibration, or expected value is inadequate, the correct output is **NO BET**.
+
+## V6 — International Football (senior men's)
+
+The separate international module is intentionally isolated from domestic club ratings. It uses the CC0-1.0 Mon Sport Info international-results CSV derived from martj42, filters to men's full internationals, and falls back to the CC0 `openfootball/internationals` mirror if the primary feed is unavailable. The current feed snapshot is updated 2026-07-20; the latest settled match parsed in the latest run was 2026-07-15. It is not an official FIFA data feed, and FIFA A-match status is not independently verified for every friendly.
+
+### Included competitions
+- FIFA World Cup and World Cup qualification.
+- UEFA European Championship, qualification, and Nations League.
+- AFC Asian Cup and qualification; Africa Cup of Nations and qualification.
+- Copa América; CONCACAF Gold Cup and qualification; OFC Nations Cup.
+- Senior men's international friendlies.
+
+### Modeling policy
+- Independent national-team Elo ratings; club Elo and domestic league goal rates are never imported.
+- Strict-date walk-forward: every fixture on a date is predicted before any result from that date updates ratings.
+- Friendlies use a lower Elo K multiplier (0.55) to reduce the influence of matches with more variable squads and incentives. This is an initial heuristic to be tested, not a proven optimum.
+- Competitive tournament multipliers are explicit and configurable in `quantlab/international.py`.
+- The current baseline uses a fixed draw prior and modest home advantage. Neutral venue, lineups, player availability, travel, rest, and squad rotation are not yet modeled.
+
+### Run
+```bash
+python -m quantlab.international fetch --output data/international/senior_men.csv --start-year 2000 --end-year 2026
+python -m quantlab.international backtest --input data/international/senior_men.csv --output-dir artifacts/international_v1 --min-train 50
+```
+
+The first release is a results-only baseline. It reports multiclass Brier score, log loss, and accuracy; segmented evaluation and expanding prequential temperature calibration are also included. The initial market-ledger test found no national-team fixture odds in the supplied club-market ledger, so ROI, yield, CLV, and drawdown are not measurable until a suitable international odds source is connected. Women's, youth, Olympic, and other non-senior competitions are out of scope for this phase and require separate source validation.
+
+
+### International evaluation: competition segments, calibration, odds and CLV
+
+The international workflow produces three separate evaluation layers:
+1. **Competition segments:** friendly, qualification, and tournament summaries, plus raw competition-folder breakdowns. Each reports sample size, multiclass Brier score, log loss, accuracy, and top-label ECE.
+2. **Prequential calibration:** expanding temperature scaling. A fixture date is calibrated only with forecasts and outcomes from earlier dates; same-day fixtures share the same pre-date calibrator. The first 300 OOS predictions are warm-up by default and are excluded from calibrated evaluation.
+3. **Market backtest:** the calibrated international probabilities are matched to the CC-BY-4.0 TipsAudit ledger and eligible Pinnacle pre-kickoff/closing prices. The report includes matched coverage, selected bets, flat-stake ROI/yield, hit rate, CLV, max drawdown, and model-versus-no-vig-market Brier/log loss.
+
+Run the evaluation locally:
+```bash
+python -m quantlab.international_evaluation \
+  --input artifacts/international_v1/international_oos_predictions.csv \
+  --output-dir artifacts/international_v1 \
+  --min-calibration-history 300 --refit-every-dates 10
+
+python -m quantlab.market_backtest \
+  --predictions artifacts/international_v1/international_calibrated_predictions.csv \
+  --odds data/market/tipsaudit-predictions-all.csv \
+  --model-prefix model_intl_calibrated --min-ev 0.03 \
+  --output-dir artifacts/international_market_intelligence
+```
+
+Market matching is restricted to the ledger's recorded fixtures and prices. The ledger is not a complete fixture-market census, and its recorded pre-kickoff price is not necessarily the bookmaker's true opening price. If no fixtures match, ROI/CLV are **not measurable**—they must not be reported as zero or interpreted as a loss-free strategy. Positive historical ROI or CLV is not proof of future profitability.
+
+
+Initial results and coverage limitations are documented in [`docs/international_v1_initial_evaluation.md`](docs/international_v1_initial_evaluation.md). The first CI run covered 2000-01-04 through 2026-03-31; the available odds ledger started later, so ROI and CLV were not measurable in that run.
