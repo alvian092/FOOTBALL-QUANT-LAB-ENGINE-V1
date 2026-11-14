@@ -38,4 +38,5 @@ def scan_1x2_market(fixtures: pd.DataFrame, min_edge=0.02, min_conservative_ev=0
                 "status":"VALUE CANDIDATE" if eligible else "NO BET"})
     result=pd.DataFrame(rows)
     if result.empty: return result
-    return result.sort_values(["status","conservative_ev","edge"],ascending=[True,False,False]).reset_index(drop=True)
+    result["_eligible_order"]=(result.status=="VALUE CANDIDATE").astype(int)
+    return result.sort_values(["_eligible_order","conservative_ev","edge"],ascending=[False,False,False]).drop(columns="_eligible_order").reset_index(drop=True)
