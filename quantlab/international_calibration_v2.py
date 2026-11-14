@@ -57,6 +57,8 @@ def _metrics(p: np.ndarray, y: np.ndarray) -> dict:
 
 
 def _date_cluster_ci(frame: pd.DataFrame, probs: np.ndarray, samples: int, seed: int) -> dict:
+    if frame.empty or samples < 1:
+        return {"brier": None, "log_loss": None}
     work = frame[["date", "outcome"]].copy()
     work["brier"] = np.square(probs - np.eye(3)[work.outcome.to_numpy(dtype=int)]).sum(axis=1)
     work["log_loss"] = -np.log(np.clip(probs[np.arange(len(work)), work.outcome.to_numpy(dtype=int)], 1e-15, 1))
