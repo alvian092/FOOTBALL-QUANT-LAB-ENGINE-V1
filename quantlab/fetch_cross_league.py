@@ -1,4 +1,4 @@
-"""Fetch CC0 cross-league results from openfootball/football.json."""
+"""Fetch settled CC0 cross-league results from openfootball/football.json."""
 from __future__ import annotations
 
 import argparse
@@ -40,7 +40,7 @@ def _score(match: dict):
 
 
 def fetch_cross_leagues(output_dir: str | Path, start_year: int = 2010,
-                        end_year: int = 2025, pause_seconds: float = 0.05) -> dict:
+                        end_year: int = 2026, pause_seconds: float = 0.05) -> dict:
     """Fetch completed season files; missing league-season files are recorded, not fabricated."""
     output = Path(output_dir)
     output.mkdir(parents=True, exist_ok=True)
@@ -92,6 +92,8 @@ def fetch_cross_leagues(output_dir: str | Path, start_year: int = 2010,
     if usable < 3:
         raise RuntimeError(f"Only {usable} leagues have >=500 settled matches; cross-league pilot requires at least 3.")
     return {"source": "openfootball/football.json", "license": "CC0-1.0",
+            "season_window": f"{start_year}-{end_year}",
+            "latest_season_may_be_incomplete": end_year >= 2026,
             "leagues": summaries, "usable_leagues": usable}
 
 
