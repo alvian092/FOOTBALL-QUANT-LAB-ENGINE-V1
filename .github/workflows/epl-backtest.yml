@@ -33,7 +33,7 @@ jobs:
       - name: Run EPL calibration and OOF weights
         run: python -m quantlab.epl_calibration --input artifacts/epl_v4_backtest/epl_v4_oos_predictions.csv --output-dir artifacts/epl_v4_calibration --min-history 300 --refit-every-dates 10 --bootstrap-samples 20000 --seed 20261114
       - name: Fetch CC0 cross-league results
-        run: python -m quantlab.fetch_cross_league --output-dir data/cross_league --start-year 2010 --end-year 2025
+        run: python -m quantlab.fetch_cross_league --output-dir data/cross_league --start-year 2010 --end-year 2026
       - name: Run independent cross-league validation
         run: |
           python -m quantlab.cross_league \
