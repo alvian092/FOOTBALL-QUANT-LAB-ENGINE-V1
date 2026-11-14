@@ -43,8 +43,6 @@ jobs:
             --input ligue1=data/cross_league/ligue1.csv \
             --input eredivisie=data/cross_league/eredivisie.csv \
             --output-dir artifacts/cross_league --min-train 100 --min-calibration-history 300
-      - name: Run category-aware calibration sensitivity and temporal validation
-        run: python -m quantlab.international_calibration_v2 --input artifacts/international_v1/international_oos_predictions.csv --output-dir artifacts/international_v2 --bootstrap-samples 2000
       - name: Fetch CC-BY-4.0 market ledger
         run: |
           mkdir -p data/market
@@ -100,6 +98,8 @@ jobs:
         run: python -m quantlab.international backtest --input data/international/senior_men.csv --output-dir artifacts/international_v1 --min-train 50
       - name: Segment international performance and fit prequential calibration
         run: python -m quantlab.international_evaluation --input artifacts/international_v1/international_oos_predictions.csv --output-dir artifacts/international_v1 --min-calibration-history 300 --refit-every-dates 10
+      - name: Run category-aware calibration sensitivity and temporal validation
+        run: python -m quantlab.international_calibration_v2 --input artifacts/international_v1/international_oos_predictions.csv --output-dir artifacts/international_v2 --bootstrap-samples 2000
       - name: Fetch CC-BY-4.0 market ledger
         run: |
           mkdir -p data/market
