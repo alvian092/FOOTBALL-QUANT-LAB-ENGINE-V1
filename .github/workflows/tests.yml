@@ -13,4 +13,5 @@ jobs:
         with:
           python-version: "3.11"
       - run: pip install -r requirements.txt
-      - run: python -m compileall -q app.py quantlab tests\n      - run: pytest -q
+      - run: python -m compileall -q app.py quantlab tests
+      - run: pytest -q
