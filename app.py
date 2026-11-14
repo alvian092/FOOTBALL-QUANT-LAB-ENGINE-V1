@@ -11,6 +11,9 @@ import streamlit as st
 
 from quantlab.data import validate_matches_csv, team_form_stats, venue_stats
 from quantlab.backtesting import walk_forward_backtest, segmented_performance
+from quantlab.ensemble import elo_ratings_from_history, poisson_component, blend_probabilities
+from quantlab.calibration import fit_temperature, calibration_report, apply_temperature
+from quantlab.scanner import scan_1x2_market
 from quantlab.market_intelligence import validate_odds_snapshots, summarize_odds_movement
 from quantlab.probability import calculate_probabilities, estimate_expected_goals, top_correct_scores
 from quantlab.market import evaluate_value, no_vig_probabilities, overround
@@ -42,7 +45,7 @@ st.title("⚽ FOOTBALL QUANT LAB")
 st.caption("Quantitative football analysis • Probability • Market intelligence • Risk control")
 page = st.sidebar.radio("NAVIGATION", ["Dashboard Overview", "Match Analysis", "Probability Explorer",
     "Odds Intelligence", "Value Bet Scanner", "Risk Management", "Prediction Tracker",
-    "Model Performance", "CSV Data Management", "Walk-Forward Backtest", "Market Intelligence", "Backup & Restore", "Settings"])
+    "Model Performance", "CSV Data Management", "Walk-Forward Backtest", "Market Intelligence", "V4 Predictive Edge Scanner", "Backup & Restore", "Settings"])
 
 matches = load_matches(DB_PATH)
 preds = list_predictions(DB_PATH)
