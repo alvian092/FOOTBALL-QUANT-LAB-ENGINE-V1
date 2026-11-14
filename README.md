@@ -170,3 +170,6 @@ python -m quantlab.market_backtest \
 ```
 
 Market matching is restricted to the ledger's recorded fixtures and prices. The ledger is not a complete fixture-market census, and its recorded pre-kickoff price is not necessarily the bookmaker's true opening price. If no fixtures match, ROI/CLV are **not measurable**—they must not be reported as zero or interpreted as a loss-free strategy. Positive historical ROI or CLV is not proof of future profitability.
+
+
+Initial results and coverage limitations are documented in [`docs/international_v1_initial_evaluation.md`](docs/international_v1_initial_evaluation.md). The first CI run covered 2000-01-04 through 2026-03-31; the available odds ledger started later, so ROI and CLV were not measurable in that run.
