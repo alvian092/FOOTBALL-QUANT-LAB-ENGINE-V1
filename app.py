@@ -11,7 +11,7 @@ import streamlit as st
 
 from quantlab.data import validate_matches_csv, team_form_stats, venue_stats
 from quantlab.backtesting import walk_forward_backtest, segmented_performance
-from quantlab.ensemble import elo_ratings_from_history, poisson_component, blend_probabilities
+from quantlab.ensemble import elo_ratings_from_history, poisson_component, blend_probabilities, fit_ensemble_weights
 from quantlab.calibration import fit_temperature, calibration_report, apply_temperature
 from quantlab.scanner import scan_1x2_market
 from quantlab.market_intelligence import validate_odds_snapshots, summarize_odds_movement
@@ -155,9 +155,10 @@ elif page == "V4 Predictive Edge Scanner":
         left, right = st.columns(2)
         home = left.selectbox("Home team", teams, key="v4_home")
         away = right.selectbox("Away team", [t for t in teams if t != home], key="v4_away")
-        pw = st.slider("Poisson weight", 0.0, 1.0, 0.4, 0.05, key="v4_pw")
-        dw = st.slider("Dixon-Coles weight", 0.0, 1.0, 0.4, 0.05, key="v4_dw")
-        ew = st.slider("Elo weight", 0.0, 1.0, 0.2, 0.05, key="v4_ew")
+        fitted_weights = st.session_state.get("v4_fitted_weights", {"poisson":0.4,"dixon_coles":0.4,"elo":0.2})
+        pw = st.slider("Poisson weight", 0.0, 1.0, float(fitted_weights["poisson"]), 0.05, key="v4_pw")
+        dw = st.slider("Dixon-Coles weight", 0.0, 1.0, float(fitted_weights["dixon_coles"]), 0.05, key="v4_dw")
+        ew = st.slider("Elo weight", 0.0, 1.0, float(fitted_weights["elo"]), 0.05, key="v4_ew")
         if pw + dw + ew > 0 and st.button("Build ensemble forecast", type="primary"):
             try:
                 hs = venue_stats(matches, home, "home", 20, 5)
@@ -189,6 +190,30 @@ elif page == "V4 Predictive Edge Scanner":
             st.caption("Weights are user-selected starting weights, not fitted or validated weights. Optimize only with out-of-fold predictions.")
     else:
         st.info("Import match history first to preview the ensemble.")
+
+    st.markdown("#### Fit ensemble weights from out-of-fold predictions")
+    st.caption("CSV needs outcome plus 9 columns: poisson_home_p/draw_p/away_p, dixon_coles_home_p/draw_p/away_p, elo_home_p/draw_p/away_p. Use predictions generated strictly out of fold.")
+    weight_file = st.file_uploader("Upload OOF component predictions", type=["csv"], key="v4_weights")
+    if weight_file:
+        try:
+            wf = pd.read_csv(weight_file)
+            component_columns = {
+                "poisson":["poisson_home_p","poisson_draw_p","poisson_away_p"],
+                "dixon_coles":["dixon_coles_home_p","dixon_coles_draw_p","dixon_coles_away_p"],
+                "elo":["elo_home_p","elo_draw_p","elo_away_p"],
+            }
+            required_weight = {"outcome"} | {c for cols in component_columns.values() for c in cols}
+            if not required_weight.issubset(wf.columns):
+                raise ValueError("Missing outcome or component probability columns.")
+            if st.button("Fit non-negative ensemble weights"):
+                oof = {name:wf[cols].to_numpy(dtype=float) for name,cols in component_columns.items()}
+                fitted = fit_ensemble_weights(oof,wf.outcome.to_numpy(dtype=int),min_samples=100)
+                st.session_state["v4_fitted_weights"] = fitted
+                st.success("OOF ensemble weights fitted and saved for this dashboard session.")
+            if st.session_state.get("v4_fitted_weights"):
+                st.dataframe(pd.DataFrame([st.session_state["v4_fitted_weights"]],index=["Fitted weights"]),use_container_width=True)
+        except Exception as exc:
+            st.error(f"OOF weight fitting rejected: {exc}")
 
     st.divider()
     st.markdown("### 2. Chronological probability calibration")
