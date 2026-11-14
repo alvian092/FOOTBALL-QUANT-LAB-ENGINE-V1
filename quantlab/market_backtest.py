@@ -12,6 +12,7 @@ import pandas as pd
 
 OUTCOMES = ("home", "draw", "away")
 RESULT_MAP = {"1": 0, "X": 1, "2": 2, "H": 0, "D": 1, "A": 2}
+MIN_BETS_FOR_RESEARCH_ASSESSMENT = 100
 
 
 def _normalise_team(value) -> str:
@@ -39,12 +40,29 @@ def _metric(probabilities: np.ndarray, outcomes: np.ndarray) -> dict:
     }
 
 
+def _bootstrap_interval(values: np.ndarray, samples: int, seed: int) -> list[float] | None:
+    """Percentile interval for the mean; descriptive only for small/selected samples."""
+    if len(values) == 0:
+        return None
+    rng = np.random.default_rng(seed)
+    estimates = np.empty(samples, dtype=float)
+    for index in range(samples):
+        draw = rng.integers(0, len(values), size=len(values))
+        estimates[index] = float(np.mean(values[draw]))
+    low, high = np.quantile(estimates, [0.025, 0.975])
+    return [float(low), float(high)]
+
+
 def evaluate_market(predictions: pd.DataFrame, odds: pd.DataFrame,
                     model_prefix: str = "model_adaptive",
-                    min_ev: float = 0.03, max_bets_per_match: int = 1) -> tuple[pd.DataFrame, dict]:
+                    min_ev: float = 0.03, max_bets_per_match: int = 1,
+                    bootstrap_samples: int = 10_000,
+                    seed: int = 20261114) -> tuple[pd.DataFrame, dict]:
     """Match by normalized teams and kickoff date ±1 day; never use post-match prices as entry odds."""
     if not 0 <= min_ev < 1 or max_bets_per_match != 1:
         raise ValueError("min_ev must be in [0,1) and only one selection per match is supported.")
+    if bootstrap_samples < 1:
+        raise ValueError("bootstrap_samples must be positive.")
     pred_required = {"date", "home_team", "away_team", "outcome"} | {
         f"{model_prefix}_{outcome}_p" for outcome in OUTCOMES
     }
@@ -58,7 +76,7 @@ def evaluate_market(predictions: pd.DataFrame, odds: pd.DataFrame,
         raise ValueError(f"Odds file missing: {sorted(odds_required - set(odds.columns))}")
 
     p = predictions.copy().reset_index(drop=True)
-    o = odds.copy().copy().reset_index(drop=True)
+    o = odds.copy().reset_index(drop=True)
     p["date"] = pd.to_datetime(p.date, utc=True, errors="coerce")
     o["kickoff_utc"] = pd.to_datetime(o.kickoff_utc, utc=True, errors="coerce")
     p["home_key"] = p.home_team.map(_normalise_team)
@@ -74,10 +92,24 @@ def evaluate_market(predictions: pd.DataFrame, odds: pd.DataFrame,
     pair_candidates = p.merge(o, on=["home_key", "away_key"], how="inner", suffixes=("_model", "_market"))
     exact_team_pair_candidates = int(len(pair_candidates))
     pair_candidates["date_gap_days"] = (pair_candidates.market_date - pair_candidates.prediction_date).dt.days.abs()
+    date_gap_distribution = {
+        f"within_{days}_days": int((pair_candidates.date_gap_days <= days).sum())
+        for days in (0, 1, 2, 3, 7)
+    }
     candidates = pair_candidates[pair_candidates.date_gap_days <= 1].sort_values(
         ["date_gap_days", "kickoff_utc"], kind="stable"
     )
-    candidates = candidates.drop_duplicates(subset=["match_id"] if "match_id" in candidates else ["home_key", "away_key", "prediction_date"])
+    # An odds fixture can be used at most once, even if duplicate predictions exist.
+    market_id_column = "match_id_market" if "match_id_market" in candidates else (
+        "match_id" if "match_id" in candidates else None
+    )
+    if market_id_column:
+        candidates = candidates.drop_duplicates(subset=[market_id_column], keep="first")
+    else:
+        candidates = candidates.drop_duplicates(
+            subset=["home_key", "away_key", "prediction_date"], keep="first"
+        )
+
     rows = []
     for row in candidates.to_dict("records"):
         try:
@@ -87,7 +119,7 @@ def evaluate_market(predictions: pd.DataFrame, odds: pd.DataFrame,
             entry = np.array([row[f"pin_open_{x}"] for x in OUTCOMES], dtype=float)
             closing = np.array([row[f"pin_close_{x}"] for x in OUTCOMES], dtype=float)
             market_p = _devig(entry)
-            closing_p = _devig(closing)
+            _devig(closing)
         except (TypeError, ValueError):
             continue
         ev = model_p * entry - 1.0
@@ -98,7 +130,7 @@ def evaluate_market(predictions: pd.DataFrame, odds: pd.DataFrame,
         odds_taken, odds_close = float(entry[pick]), float(closing[pick])
         profit = odds_taken - 1.0 if actual == pick else -1.0
         rows.append({
-            "match_id": row.get("match_id"),
+            "match_id": row.get(market_id_column) if market_id_column else row.get("match_id"),
             "date": str(row["kickoff_utc"]),
             "home_team": row["home"], "away_team": row["away"],
             "competition": row.get("competition", row.get("league", "")),
@@ -122,27 +154,36 @@ def evaluate_market(predictions: pd.DataFrame, odds: pd.DataFrame,
         "odds_date_min": str(o.kickoff_utc.min()) if o.kickoff_utc.notna().any() else None,
         "odds_date_max": str(o.kickoff_utc.max()) if o.kickoff_utc.notna().any() else None,
         "exact_team_pair_candidates": exact_team_pair_candidates,
+        "date_gap_distribution": date_gap_distribution,
         "within_one_day_matches": matched,
     }
     if bets.empty:
-        summary = {"matching_diagnostics": diagnostics, "matched_fixtures_with_prices": matched, "bets": 0, "min_ev": min_ev,
-                   "note": "No qualifying bets. This is not a zero-loss result; inspect odds coverage and edge threshold."}
+        summary = {
+            "matching_diagnostics": diagnostics, "matched_fixtures_with_prices": matched,
+            "bets": 0, "min_ev": min_ev, "sample_assessment": "no_qualifying_bets",
+            "note": "No qualifying bets. This is not a zero-loss result; inspect odds coverage and edge threshold.",
+        }
         return bets, summary
+
     bets = bets.sort_values(["date", "home_team", "away_team"]).reset_index(drop=True)
     bets["cumulative_profit"] = bets.profit_units.cumsum()
     bets["running_peak"] = bets.cumulative_profit.cummax().clip(lower=0)
     bets["drawdown"] = bets.running_peak - bets.cumulative_profit
     stake = float(len(bets))
+    roi = float(bets.profit_units.sum() / stake)
+    roi_ci = _bootstrap_interval(bets.profit_units.to_numpy(dtype=float), bootstrap_samples, seed)
+    clv_ci = _bootstrap_interval(bets.clv_pct.to_numpy(dtype=float), bootstrap_samples, seed + 1)
+    sample_adequate = len(bets) >= MIN_BETS_FOR_RESEARCH_ASSESSMENT
     summary = {
         "matching_diagnostics": diagnostics,
         "matched_fixtures_with_prices": matched, "bets": int(len(bets)),
         "coverage_of_matched_predictions": float(len(bets) / matched) if matched else 0.0,
         "min_ev": min_ev, "staking": "flat 1 unit per bet; max one 1X2 selection per match",
         "total_staked_units": stake, "profit_units": float(bets.profit_units.sum()),
-        "roi_yield": float(bets.profit_units.sum() / stake),
+        "roi_yield": roi, "roi_yield_ci_95": roi_ci,
         "hit_rate": float((bets.profit_units > 0).mean()),
         "average_expected_value": float(bets.expected_value.mean()),
-        "average_clv_pct": float(bets.clv_pct.mean()),
+        "average_clv_pct": float(bets.clv_pct.mean()), "average_clv_ci_95": clv_ci,
         "positive_clv_share": float((bets.clv_pct > 0).mean()),
         "max_drawdown_units": float(bets.drawdown.max()),
         "model_vs_market_brier": {
@@ -151,7 +192,9 @@ def evaluate_market(predictions: pd.DataFrame, odds: pd.DataFrame,
         "model_vs_market_log_loss": {
             "model": float(bets.log_loss_model.mean()), "market_no_vig": float(bets.log_loss_market.mean())
         },
-        "caveat": "Conditional on the provider's logged fixture sample and Pinnacle prices. This is not a complete league-market census; positive historical ROI is not proof of future profitability.",
+        "sample_assessment": "minimum_research_sample_met" if sample_adequate else "insufficient_sample",
+        "minimum_bets_for_research_assessment": MIN_BETS_FOR_RESEARCH_ASSESSMENT,
+        "caveat": "Bootstrap intervals are descriptive and do not correct for selection bias or temporal dependence. Results are conditional on the provider's logged fixture sample; they do not establish future profitability.",
     }
     return bets, summary
 
@@ -163,9 +206,14 @@ def main():
     parser.add_argument("--model-prefix", default="model_adaptive")
     parser.add_argument("--min-ev", type=float, default=0.03)
     parser.add_argument("--output-dir", default="artifacts/market_intelligence")
+    parser.add_argument("--bootstrap-samples", type=int, default=10_000)
+    parser.add_argument("--seed", type=int, default=20261114)
     args = parser.parse_args()
-    bets, summary = evaluate_market(pd.read_csv(args.predictions), pd.read_csv(args.odds),
-                                    args.model_prefix, args.min_ev)
+    bets, summary = evaluate_market(
+        pd.read_csv(args.predictions), pd.read_csv(args.odds),
+        args.model_prefix, args.min_ev,
+        bootstrap_samples=args.bootstrap_samples, seed=args.seed,
+    )
     output = Path(args.output_dir)
     output.mkdir(parents=True, exist_ok=True)
     bets.to_csv(output / "market_bets.csv", index=False)
