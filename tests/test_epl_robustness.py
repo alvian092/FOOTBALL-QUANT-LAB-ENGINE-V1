@@ -26,7 +26,7 @@ def test_robustness_reports_paired_cluster_and_season_metrics():
     seasons, summary = evaluate_predictions(_predictions(), samples=1000, seed=7)
     assert summary["fixtures"] == 8
     assert summary["paired_bootstrap"]["clusters"] == 4
-    assert summary["paired_bootstrap"]["metrics"]["brier"]["elo_better"] is True
+    assert summary["paired_bootstrap"]["metrics"]["brier"]["left_better"] is True
     assert set(seasons.model) == {"elo", "ensemble"}
     assert seasons.season.nunique() == 1
 
