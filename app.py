@@ -224,7 +224,7 @@ elif page == "Prediction Tracker":
                     st.success("Closing odds saved.")
                     st.rerun()
                 except Exception as exc: st.error(str(exc))
-        with st.form("settle_prediction_form")
+        with st.form("settle_prediction_form"):
             selected = st.selectbox("Prediction record", list(choices))
             hg = st.number_input("Actual home goals", min_value=0, step=1)
             ag = st.number_input("Actual away goals", min_value=0, step=1)
