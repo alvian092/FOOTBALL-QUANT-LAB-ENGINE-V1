@@ -1,6 +1,7 @@
 """SQLite persistence, immutable prediction snapshots, and safe backup/restore."""
 from __future__ import annotations
 import json
+import math
 import sqlite3
 from pathlib import Path
 from datetime import datetime, timezone
@@ -27,8 +28,14 @@ def initialize(db_path=DEFAULT_DB):
         CREATE TABLE IF NOT EXISTS matches (
           match_id TEXT PRIMARY KEY, date TEXT NOT NULL, home_team TEXT NOT NULL,
           away_team TEXT NOT NULL, home_goals INTEGER NOT NULL, away_goals INTEGER NOT NULL,
-          dataset_id INTEGER, home_xg REAL, away_xg REAL,
+          dataset_id INTEGER, home_xg REAL, away_xg REAL, league TEXT,
           FOREIGN KEY(dataset_id) REFERENCES datasets(id)
+        );
+        CREATE TABLE IF NOT EXISTS odds_snapshots (
+          id INTEGER PRIMARY KEY AUTOINCREMENT, match_id TEXT NOT NULL, market TEXT NOT NULL,
+          selection TEXT NOT NULL, bookmaker TEXT NOT NULL DEFAULT 'Unknown', odds REAL NOT NULL,
+          captured_at TEXT NOT NULL, source TEXT NOT NULL DEFAULT 'manual',
+          UNIQUE(match_id, market, selection, bookmaker, captured_at)
         );
         CREATE TABLE IF NOT EXISTS predictions (
           id INTEGER PRIMARY KEY AUTOINCREMENT, match_id TEXT NOT NULL, kickoff TEXT NOT NULL,
@@ -40,8 +47,8 @@ def initialize(db_path=DEFAULT_DB):
         );
         """)
         mcols = {r[1] for r in conn.execute("PRAGMA table_info(matches)")}
-        for name in ("home_xg", "away_xg"):
-            if name not in mcols: conn.execute(f"ALTER TABLE matches ADD COLUMN {name} REAL")
+        for name, declaration in (("home_xg","REAL"),("away_xg","REAL"),("league","TEXT")):
+            if name not in mcols: conn.execute(f"ALTER TABLE matches ADD COLUMN {name} {declaration}")
         pcols = {r[1] for r in conn.execute("PRAGMA table_info(predictions)")}
         for name, declaration in (("stake", "REAL NOT NULL DEFAULT 0"), ("closing_odds", "REAL")):
             if name not in pcols: conn.execute(f"ALTER TABLE predictions ADD COLUMN {name} {declaration}")
@@ -57,11 +64,12 @@ def save_dataset(df, filename, content_hash, db_path=DEFAULT_DB):
         dataset_id = int(conn.execute("SELECT id FROM datasets WHERE content_hash=?", (content_hash,)).fetchone()[0])
         for r in df.itertuples():
             hxg, axg = (float(r.home_xg), float(r.away_xg)) if has_xg else (None, None)
+            league = str(r.league) if "league" in df.columns else None
             conn.execute("""INSERT OR IGNORE INTO matches
-                (match_id,date,home_team,away_team,home_goals,away_goals,dataset_id,home_xg,away_xg)
-                VALUES(?,?,?,?,?,?,?,?,?)""",
+                (match_id,date,home_team,away_team,home_goals,away_goals,dataset_id,home_xg,away_xg,league)
+                VALUES(?,?,?,?,?,?,?,?,?,?)""",
                 (str(r.match_id), r.date.isoformat(), str(r.home_team), str(r.away_team),
-                 int(r.home_goals), int(r.away_goals), dataset_id, hxg, axg))
+                 int(r.home_goals), int(r.away_goals), dataset_id, hxg, axg, league))
         conn.commit()
         return dataset_id
 
@@ -161,3 +169,27 @@ def restore_database(backup_path, db_path=DEFAULT_DB):
     finally:
         if temp.exists(): temp.unlink()
     initialize(target)
+
+
+def save_odds_snapshot(match_id, market, odds_by_selection, captured_at, bookmaker="Unknown", source="manual", db_path=DEFAULT_DB):
+    """Persist one immutable, timestamped market snapshot with all selections."""
+    initialize(db_path)
+    stamp = pd.Timestamp(captured_at)
+    if stamp.tzinfo is None: raise ValueError("captured_at must include a timezone.")
+    if not str(match_id).strip() or not str(market).strip() or not isinstance(odds_by_selection, dict) or len(odds_by_selection) < 2:
+        raise ValueError("Provide match_id, market, and at least two mutually exclusive selections.")
+    if any(not str(k).strip() or not math.isfinite(float(v)) or float(v) <= 1
+           for k,v in odds_by_selection.items()):
+        raise ValueError("Selections must be named and all decimal odds must be finite and greater than 1.")
+    with connect(db_path) as conn:
+        conn.executemany("""INSERT OR IGNORE INTO odds_snapshots
+            (match_id,market,selection,bookmaker,odds,captured_at,source) VALUES(?,?,?,?,?,?,?)""",
+            [(str(match_id),str(market),str(k),str(bookmaker),float(v),stamp.isoformat(),str(source))
+             for k,v in odds_by_selection.items()])
+        conn.commit()
+
+
+def list_odds_snapshots(db_path=DEFAULT_DB):
+    initialize(db_path)
+    with connect(db_path) as conn:
+        return pd.read_sql_query("SELECT * FROM odds_snapshots ORDER BY captured_at", conn)

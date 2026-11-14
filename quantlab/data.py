@@ -32,6 +32,10 @@ def validate_matches_csv(file_or_buffer) -> tuple[pd.DataFrame, list[str]]:
             df[col] = pd.to_numeric(df[col], errors="coerce")
             if df[col].isna().any() or (df[col] < 0).any():
                 errors.append(f"{col} must contain non-negative numeric xG values.")
+    if "league" in df.columns:
+        if df["league"].isna().any() or (df["league"].astype(str).str.strip() == "").any():
+            errors.append("league cannot contain empty values when provided.")
+        df["league"] = df["league"].astype("string").str.strip()
     if "match_id" not in df.columns:
         df["match_id"] = df.date.astype(str) + "|" + df.home_team.astype(str) + "|" + df.away_team.astype(str)
     df["match_id"] = df.match_id.astype("string").str.strip()

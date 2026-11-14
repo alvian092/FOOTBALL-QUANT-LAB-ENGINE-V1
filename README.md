@@ -27,6 +27,38 @@ Recency weighting uses an exponential half-life measured in matches. Venue split
 
 These are retrospective metrics, not guarantees of future performance. Predictions recorded by older model versions are not automatically re-generated or calibrated. Asian handicap probabilities exist, but AH settlement is not yet integrated into the prediction tracker.
 
+## V3 — Advanced Backtesting & Market Intelligence
+
+The V3 workstream adds research tools that compare a chronological model forecast with a no-vig bookmaker benchmark. These tools do not create an automatic betting signal.
+
+### Walk-forward protocol
+- Fixtures are sorted chronologically and each prediction sees only rows with a strictly earlier date.
+- Same-day fixtures are excluded from one another's training history to prevent result leakage.
+- When a league column is supplied, training history is scoped to that league.
+- min_train controls the minimum prior match count; optional max_train supports rolling rather than expanding windows.
+- The predictor is a callback so alternative models can be tested under the same temporal protocol.
+
+### Bookmaker benchmark
+For rows containing home_odds, draw_odds, and away_odds, the backtest removes the overround by normalizing inverse decimal odds. It reports model and market multiclass Brier score, log loss and accuracy on the same fixtures, plus paired bootstrap intervals for the model-minus-market loss improvement. Positive improvement means the model has lower loss. An interval crossing zero does not establish superiority.
+
+### Historical odds snapshots
+The Market Intelligence dashboard accepts CSV fields:
+match_id, market, selection, odds, captured_at, plus optional bookmaker.
+Each timestamped bookmaker/market snapshot must contain at least two unique selections. Capture timestamps should include an explicit timezone. Snapshots are stored as immutable records; duplicate timestamp/selection rows are ignored by SQLite. Movement reports compare first and latest complete snapshots, including no-vig probability shifts and overround changes.
+
+### Segmented performance
+Settled prediction records can be grouped by market (and by league when that metadata is available). Segments below the configured minimum sample are explicitly labelled SMALL SAMPLE. Segment ROI and CLV are descriptive, not proof of a repeatable edge.
+
+### Historical match CSV additions
+The match CSV may include league. It is persisted with match history and enables league-specific walk-forward training. Do not combine competitions with materially different scoring environments unless you intentionally want a pooled benchmark.
+
+### Important limitations
+- No live bookmaker odds feed is bundled. Market movement depends on the timestamps and accuracy of uploaded snapshots.
+- Walk-forward uses the current transparent Poisson/xG feature estimator; it is not a fitted machine-learning training pipeline.
+- Bookmaker comparison is available only for matches with a complete 1X2 odds triplet.
+- Bootstrap intervals quantify uncertainty from the tested sample; they do not guarantee future performance.
+- Avoid tuning thresholds on the same period used to report final performance. Keep a final untouched time period for confirmation.
+
 ## Run locally
 ```bash
 python -m venv .venv
