@@ -1,7 +1,7 @@
 from __future__ import annotations
 import hashlib
 import json
-from datetime import datetime, timezone
+from datetime import datetime, timezone, time as dt_time
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
@@ -170,7 +170,7 @@ elif page == "Prediction Tracker":
         match_id = st.text_input("Unique Match ID")
         home_team = st.text_input("Home team")
         away_team = st.text_input("Away team")
-        kickoff_local = st.datetime_input("Kickoff (Asia/Jakarta)", value=datetime.now())
+        kickoff_date = st.date_input("Kickoff date (Asia/Jakarta)")\n        kickoff_time = st.time_input("Kickoff time (Asia/Jakarta)", value=dt_time(19, 0))
         market = st.selectbox("Selected market (choose NO BET if no qualifying value)", ["NO BET","1X2 Home","1X2 Draw","1X2 Away","Over 1.5","Under 1.5","Over 2.5","Under 2.5","Over 3.5","Under 3.5","BTTS Yes","BTTS No"])
         odds_input = st.number_input("Odds (1.01 if NO BET)", min_value=1.01, value=1.01, step=0.01)
         ev_input = st.number_input("Estimated EV (decimal; 0 if NO BET)", value=0.0, step=0.01)
@@ -184,7 +184,7 @@ elif page == "Prediction Tracker":
                 market_value, odds_value, ev_value, stake_value = None, None, None, 0.0
             else:
                 market_value, odds_value, ev_value, stake_value = market, odds_input, ev_input, stake_input
-            kickoff = kickoff_local.replace(tzinfo=ZoneInfo("Asia/Jakarta")).isoformat()
+            kickoff = datetime.combine(kickoff_date, kickoff_time).replace(tzinfo=ZoneInfo("Asia/Jakarta")).isoformat()
             pid = save_prediction(match_id,kickoff,home_team,away_team,{"model_status":"provisional"},
                                   market_value,odds_value,ev_value,"1.0.0",stake_value,DB_PATH)
             st.success(f"Prediction locked. Record ID: {pid}")
