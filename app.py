@@ -27,6 +27,11 @@ st.markdown("""
 .stApp {background: #0b1220; color: #e5e7eb;}
 [data-testid="stMetric"] {background: #111c2e; padding: 14px; border-radius: 10px;}
 [data-testid="stSidebar"] {background: #101a2b;}
+@media (max-width: 768px) {
+  .block-container {padding-left: 0.85rem; padding-right: 0.85rem;}
+  [data-testid="stMetric"] {padding: 9px; margin-bottom: 6px;}
+  [data-testid="stDataFrame"] {overflow-x: auto;}
+}
 </style>
 """, unsafe_allow_html=True)
 
