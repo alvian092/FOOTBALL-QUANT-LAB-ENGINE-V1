@@ -6,16 +6,14 @@ Run from the repository root:
 pip install -r requirements.txt
 python -m quantlab.epl_backtest --input data/epl_pilot/epl_results_2010_2026.csv
 python -m quantlab.epl_robustness --input artifacts/epl_v4_backtest/epl_v4_oos_predictions.csv
+python -m quantlab.epl_calibration --input artifacts/epl_v4_backtest/epl_v4_oos_predictions.csv
 pytest -q
 ```
 
-The backtest writes:
-- `artifacts/epl_v4_backtest/epl_v4_oos_predictions.csv`
-- `artifacts/epl_v4_backtest/epl_v4_backtest_summary.json`
-
-The robustness runner writes:
-- `artifacts/epl_v4_robustness/epl_v4_paired_bootstrap.json`
-- `artifacts/epl_v4_robustness/epl_v4_season_robustness.csv`
+The runners write:
+- `artifacts/epl_v4_backtest/`: raw walk-forward predictions and summary.
+- `artifacts/epl_v4_robustness/`: paired date-cluster bootstrap and per-season metrics.
+- `artifacts/epl_v4_calibration/`: expanding-window calibrated predictions, as-of parameters, and paired comparisons.
 
 ## Evaluation design
 
@@ -25,14 +23,14 @@ The robustness runner writes:
 - Team scoring/conceding rates use up to 20 prior home/away venue fixtures with exponential recency weighting (five-match half-life).
 - Components: Poisson (rho=0), Dixon-Coles (rho=-0.08), Elo (K=20, home advantage 60, draw prior 0.26), and a fixed V4 blend (0.4 / 0.4 / 0.2).
 - Elo updates are batched by historical date so fixture ordering within a date cannot change ratings.
-- Metrics: multiclass Brier score, log loss, accuracy, and fixture-level bootstrap 95% interval for Brier.
-- Elo-versus-Ensemble robustness uses paired percentile bootstrap resampling by calendar match date (20,000 samples), plus descriptive season-level metrics.
+- The robustness comparison is paired on identical OOS fixtures and resamples calendar-date clusters (20,000 samples).
+- Calibration and adaptive ensemble weights use an expanding window over prior OOS predictions only; parameters refit every 10 distinct match dates after 300 prior OOS fixtures.
 
 ## Interpretation limits
 
 - This is a goals/results-only model test. The source has no xG, so goal rates are not xG.
 - The fixed ensemble weights are provisional V4 defaults, not weights fitted on this test set.
-- The original fixture-level bootstrap interval does not account for temporal dependence; the paired robustness interval clusters by match date but may still retain serial dependence across dates.
+- The original fixture-level bootstrap interval does not account for temporal dependence; paired robustness intervals cluster by match date but may still retain serial dependence across dates.
 - There are no bookmaker odds in this dataset. Do not interpret predictive metrics as ROI, yield, CLV, or evidence of betting profitability.
 - No bet recommendations are produced by this backtest.
-- See [ROBUSTNESS.md](ROBUSTNESS.md) for the paired Elo-versus-Ensemble results and season breakdown.
+- See [ROBUSTNESS.md](ROBUSTNESS.md) and [CALIBRATION.md](CALIBRATION.md) for the detailed evaluations.
