@@ -80,5 +80,6 @@ jobs:
             artifacts/cross_league/
             artifacts/market_intelligence/
             artifacts/international_v1/
+            artifacts/international_market_intelligence/
           if-no-files-found: error
           retention-days: 90
