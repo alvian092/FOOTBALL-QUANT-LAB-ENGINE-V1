@@ -58,5 +58,5 @@ def test_experiment_report_has_temporal_and_segment_metrics():
     assert set(report["segments"]) == {"friendly", "qualification", "tournament"}
     assert "paired_date_cluster_bootstrap_ci_95" in report["overall"]
     assert "raw" in report["by_calendar_year"].get("2021", {})
-    assert "calibrated" in report["by_calendar_year"].get("2020", {})
+    assert "calibrated" in report["by_calendar_year"].get("2021", {})
     assert report["sensitivity_grid"]
