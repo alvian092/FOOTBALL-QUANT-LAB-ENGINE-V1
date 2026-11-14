@@ -60,22 +60,23 @@ def _lambdas(history: pd.DataFrame, fixture: pd.Series) -> tuple[float, float]:
     return max(0.05, float(lam_home)), max(0.05, float(lam_away))
 
 
-def _elo_probabilities_round_safe(history: pd.DataFrame, home_team: str,
-                                  away_team: str) -> dict[str, float]:
-    """Replay historical rounds simultaneously so same-day fixture order cannot matter."""
-    ratings: dict[str, float] = {}
-    for _, day in history.sort_values("date").groupby("date", sort=True):
-        deltas: dict[str, float] = {}
-        for row in day.itertuples():
-            rh = ratings.get(str(row.home_team), 1500.0)
-            ra = ratings.get(str(row.away_team), 1500.0)
-            expected = 1.0 / (1.0 + 10.0 ** (-((rh + 60.0) - ra) / 400.0))
-            actual = 1.0 if row.home_goals > row.away_goals else 0.5 if row.home_goals == row.away_goals else 0.0
-            delta = 20.0 * (actual - expected)
-            deltas[str(row.home_team)] = deltas.get(str(row.home_team), 0.0) + delta
-            deltas[str(row.away_team)] = deltas.get(str(row.away_team), 0.0) - delta
-        for team, delta in deltas.items():
-            ratings[team] = ratings.get(team, 1500.0) + delta
+def _update_elo_ratings_for_day(ratings: dict[str, float], day: pd.DataFrame) -> None:
+    """Apply a matchday's Elo updates simultaneously using pre-day ratings."""
+    deltas: dict[str, float] = {}
+    for row in day.itertuples():
+        rh = ratings.get(str(row.home_team), 1500.0)
+        ra = ratings.get(str(row.away_team), 1500.0)
+        expected = 1.0 / (1.0 + 10.0 ** (-((rh + 60.0) - ra) / 400.0))
+        actual = 1.0 if row.home_goals > row.away_goals else 0.5 if row.home_goals == row.away_goals else 0.0
+        delta = 20.0 * (actual - expected)
+        deltas[str(row.home_team)] = deltas.get(str(row.home_team), 0.0) + delta
+        deltas[str(row.away_team)] = deltas.get(str(row.away_team), 0.0) - delta
+    for team, delta in deltas.items():
+        ratings[team] = ratings.get(team, 1500.0) + delta
+
+
+def _elo_probabilities_from_ratings(ratings: dict[str, float], home_team: str,
+                                    away_team: str) -> dict[str, float]:
     rh, ra = ratings.get(home_team, 1500.0), ratings.get(away_team, 1500.0)
     expected = 1.0 / (1.0 + 10.0 ** (-((rh + 60.0) - ra) / 400.0))
     draw = 0.26
@@ -83,17 +84,30 @@ def _elo_probabilities_round_safe(history: pd.DataFrame, home_team: str,
             "away": (1.0 - draw) * (1.0 - expected)}
 
 
+def _elo_probabilities_round_safe(history: pd.DataFrame, home_team: str,
+                                  away_team: str) -> dict[str, float]:
+    """Replay historical rounds simultaneously so same-day fixture order cannot matter."""
+    ratings: dict[str, float] = {}
+    if not history.empty:
+        for _, day in history.sort_values("date").groupby("date", sort=True):
+            _update_elo_ratings_for_day(ratings, day)
+    return _elo_probabilities_from_ratings(ratings, home_team, away_team)
+
+
 def _as_dict(probabilities) -> dict[str, float]:
     return {"home": float(probabilities.home_win), "draw": float(probabilities.draw),
             "away": float(probabilities.away_win)}
 
 
-def predict_components(history: pd.DataFrame, fixture: pd.Series) -> dict[str, dict[str, float]]:
+def predict_components(history: pd.DataFrame, fixture: pd.Series,
+                       elo_ratings: dict[str, float] | None = None) -> dict[str, dict[str, float]]:
     """Build four predictions using history supplied by the chronological runner only."""
     lam_home, lam_away = _lambdas(history, fixture)
     poisson_p = _as_dict(calculate_probabilities(lam_home, lam_away, rho=0.0))
     dc_p = _as_dict(calculate_probabilities(lam_home, lam_away, rho=-0.08))
-    elo_p = _elo_probabilities_round_safe(history, str(fixture.home_team), str(fixture.away_team))
+    elo_p = (_elo_probabilities_round_safe(history, str(fixture.home_team), str(fixture.away_team))
+             if elo_ratings is None else
+             _elo_probabilities_from_ratings(elo_ratings, str(fixture.home_team), str(fixture.away_team)))
     ensemble = {}
     for outcome in ("home", "draw", "away"):
         ensemble[outcome] = (
@@ -145,12 +159,13 @@ def run_epl_backtest(matches: pd.DataFrame, min_train: int = 100,
 
     history_rows = []
     output = []
+    elo_ratings: dict[str, float] = {}
     # Add an entire calendar day to history only after all fixtures on that day are predicted.
     for match_date, day in df.groupby("date", sort=True):
         history = pd.DataFrame(history_rows)
         if len(history) >= min_train:
             for _, fixture in day.iterrows():
-                components = predict_components(history, fixture)
+                components = predict_components(history, fixture, elo_ratings=elo_ratings)
                 hg, ag = int(fixture.home_goals), int(fixture.away_goals)
                 outcome = 0 if hg > ag else 1 if hg == ag else 2
                 record = {
@@ -167,6 +182,7 @@ def run_epl_backtest(matches: pd.DataFrame, min_train: int = 100,
                     for key in ("home", "draw", "away"):
                         record[f"{model}_{key}_p"] = probs[key]
                 output.append(record)
+        _update_elo_ratings_for_day(elo_ratings, day)
         history_rows.extend(day.to_dict("records"))
 
     results = pd.DataFrame(output)
