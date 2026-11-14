@@ -97,3 +97,27 @@ def test_odds_snapshots_persist_immutably(tmp_path):
     saved = list_odds_snapshots(db)
     assert len(saved) == 3
     assert set(saved.selection) == {"Home","Draw","Away"}
+
+
+def test_league_metadata_persists_and_legacy_schema_migrates(tmp_path):
+    from quantlab.storage import save_dataset, load_matches
+    db = tmp_path / "league.sqlite"
+    # Simulate a V2 database schema without the league column.
+    import sqlite3
+    with sqlite3.connect(db) as conn:
+        conn.execute("""CREATE TABLE matches (
+            match_id TEXT PRIMARY KEY, date TEXT NOT NULL, home_team TEXT NOT NULL,
+            away_team TEXT NOT NULL, home_goals INTEGER NOT NULL, away_goals INTEGER NOT NULL,
+            dataset_id INTEGER, home_xg REAL, away_xg REAL)""")
+    initialize(db)
+    sample = pd.DataFrame({
+        "match_id":["L1"], "date":pd.to_datetime(["2026-02-01"],utc=True),
+        "home_team":["A"],"away_team":["B"],"home_goals":[2],"away_goals":[1],
+        "league":["Premier Test"],"home_xg":[1.7],"away_xg":[0.8],
+    })
+    save_dataset(sample,"league.csv","league-hash",db)
+    loaded = load_matches(db)
+    assert loaded.iloc[0].league == "Premier Test"
+    with sqlite3.connect(db) as conn:
+        column_types = {row[1]:row[2] for row in conn.execute("PRAGMA table_info(matches)")}
+    assert column_types["league"].upper() == "TEXT"
