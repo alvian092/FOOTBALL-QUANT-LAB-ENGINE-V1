@@ -1,4 +1,4 @@
-name: EPL and V5 cross-league validation
+name: EPL, V5 cross-league and international validation
 
 on:
   pull_request:
@@ -13,7 +13,7 @@ on:
 jobs:
   validation:
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -56,15 +56,20 @@ jobs:
             --odds data/market/tipsaudit-predictions-all.csv \
             --model-prefix model_adaptive --min-ev 0.03 \
             --output-dir artifacts/market_intelligence
-      - name: Upload V5 evaluation reports
+      - name: Fetch senior men's international results
+        run: python -m quantlab.international fetch --output data/international/senior_men.csv --start-year 2000 --end-year 2026
+      - name: Run international Elo walk-forward
+        run: python -m quantlab.international backtest --input data/international/senior_men.csv --output-dir artifacts/international_v1 --min-train 50
+      - name: Upload V5 and international evaluation reports
         uses: actions/upload-artifact@v4
         with:
-          name: football-quant-lab-v5-evaluation
+          name: football-quant-lab-v5-international-evaluation
           path: |
             artifacts/epl_v4_backtest/
             artifacts/epl_v4_robustness/
             artifacts/epl_v4_calibration/
             artifacts/cross_league/
             artifacts/market_intelligence/
+            artifacts/international_v1/
           if-no-files-found: error
           retention-days: 90
