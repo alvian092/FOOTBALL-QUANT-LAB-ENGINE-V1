@@ -60,6 +60,15 @@ jobs:
         run: python -m quantlab.international fetch --output data/international/senior_men.csv --start-year 2000 --end-year 2026
       - name: Run international Elo walk-forward
         run: python -m quantlab.international backtest --input data/international/senior_men.csv --output-dir artifacts/international_v1 --min-train 50
+      - name: Segment international performance and fit prequential calibration
+        run: python -m quantlab.international_evaluation --input artifacts/international_v1/international_oos_predictions.csv --output-dir artifacts/international_v1 --min-calibration-history 300 --refit-every-dates 10
+      - name: Evaluate international odds, ROI, CLV and drawdown
+        run: |
+          python -m quantlab.market_backtest \
+            --predictions artifacts/international_v1/international_calibrated_predictions.csv \
+            --odds data/market/tipsaudit-predictions-all.csv \
+            --model-prefix model_intl_calibrated --min-ev 0.03 \
+            --output-dir artifacts/international_market_intelligence
       - name: Upload V5 and international evaluation reports
         uses: actions/upload-artifact@v4
         with:
