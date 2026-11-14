@@ -68,12 +68,13 @@ def _calibrate_prequential(frame: pd.DataFrame, min_history: int = 300,
     out["model_intl_calibrated_draw_p"] = np.nan
     out["model_intl_calibrated_away_p"] = np.nan
     out["calibration_temperature"] = np.nan
-    ordered_dates = sorted(out.date.unique())
+    date_groups = out.groupby("date", sort=True).indices
+    ordered_dates = list(date_groups.keys())
     history_indices: list[int] = []
     temperature = 1.0
     last_fit_date_index = None
     for date_index, day in enumerate(ordered_dates):
-        day_indices = np.flatnonzero(out.date.to_numpy() == day)
+        day_indices = np.asarray(date_groups[day], dtype=int)
         if len(history_indices) >= min_history:
             if last_fit_date_index is None or date_index - last_fit_date_index >= refit_every_dates:
                 temperature = _fit_temperature(raw[history_indices], y[history_indices])
