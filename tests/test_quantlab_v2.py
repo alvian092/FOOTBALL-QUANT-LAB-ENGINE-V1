@@ -17,7 +17,7 @@ def history():
 def test_recency_and_venue_features():
     df=history()
     form=team_form_stats(df,"A",limit=4,half_life=1)
-    home=venue_stats(df,"A","home",limit=10)
+    home=venue_stats(df,"A","home",limit=10,half_life=1e12)
     assert form["matches"] == 4 and form["xg_for"] is not None
     assert home["matches"] == 2
     assert home["scored_per_match"] == pytest.approx(1.0)
