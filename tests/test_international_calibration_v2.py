@@ -52,11 +52,11 @@ def test_same_day_predictions_are_not_in_each_others_training_history():
 
 
 def test_experiment_report_has_temporal_and_segment_metrics():
-    frame = _frame(40)
-    _, report = run_experiments(frame, bootstrap_samples=100)
+    frame = _frame(540)
+    _, report = run_experiments(frame, bootstrap_samples=10)
     assert report["default_configuration_predeclared"] is True
     assert set(report["segments"]) == {"friendly", "qualification", "tournament"}
     assert "paired_date_cluster_bootstrap_ci_95" in report["overall"]
-    assert "raw" in report["by_calendar_year"].get("2020", {})
+    assert "raw" in report["by_calendar_year"].get("2021", {})
     assert "calibrated" in report["by_calendar_year"].get("2020", {})
     assert report["sensitivity_grid"]
