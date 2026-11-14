@@ -44,7 +44,7 @@ def _bootstrap_mean_ci(values, samples=2000, seed=42):
 
 
 def walk_forward_backtest(matches: pd.DataFrame, predictor, min_train=100,
-                          test_size=1, max_train=None, bootstrap_samples=2000):
+                          max_train=None, bootstrap_samples=2000, group_by_league=True):
     """Call predictor(train_history, fixture) using only strictly earlier dates.
 
     Required match fields: date, home_team, away_team, home_goals, away_goals.
@@ -54,7 +54,7 @@ def walk_forward_backtest(matches: pd.DataFrame, predictor, min_train=100,
     missing = required - set(matches.columns)
     if missing:
         raise ValueError(f"Missing backtest columns: {', '.join(sorted(missing))}")
-    if min_train < 1 or test_size < 1 or (max_train is not None and max_train < min_train):
+    if min_train < 1 or (max_train is not None and max_train < min_train):
         raise ValueError("Invalid train/test window settings.")
     df = matches.copy()
     df["date"] = pd.to_datetime(df["date"], errors="coerce", utc=True)
@@ -65,6 +65,8 @@ def walk_forward_backtest(matches: pd.DataFrame, predictor, min_train=100,
     for _, fixture in df.iterrows():
         # Strictly earlier dates: same-day results cannot leak into one another.
         history = df[df.date < fixture.date]
+        if group_by_league and "league" in df.columns and pd.notna(fixture.get("league")):
+            history = history[history.league == fixture.league]
         if max_train is not None:
             history = history.tail(max_train)
         if len(history) < min_train:
