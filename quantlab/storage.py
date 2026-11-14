@@ -1,4 +1,4 @@
-"""SQLite persistence for datasets and immutable pre-match predictions."""
+"""SQLite persistence, immutable prediction snapshots, and safe backup/restore."""
 from __future__ import annotations
 import json
 import sqlite3
@@ -9,7 +9,7 @@ import pandas as pd
 DEFAULT_DB = Path("data/football_quant_lab.sqlite3")
 
 
-def connect(db_path: str | Path = DEFAULT_DB) -> sqlite3.Connection:
+def connect(db_path=DEFAULT_DB):
     path = Path(db_path)
     path.parent.mkdir(parents=True, exist_ok=True)
     conn = sqlite3.connect(path)
@@ -17,7 +17,7 @@ def connect(db_path: str | Path = DEFAULT_DB) -> sqlite3.Connection:
     return conn
 
 
-def initialize(db_path: str | Path = DEFAULT_DB) -> None:
+def initialize(db_path=DEFAULT_DB):
     with connect(db_path) as conn:
         conn.executescript("""
         CREATE TABLE IF NOT EXISTS datasets (
@@ -27,64 +27,61 @@ def initialize(db_path: str | Path = DEFAULT_DB) -> None:
         CREATE TABLE IF NOT EXISTS matches (
           match_id TEXT PRIMARY KEY, date TEXT NOT NULL, home_team TEXT NOT NULL,
           away_team TEXT NOT NULL, home_goals INTEGER NOT NULL, away_goals INTEGER NOT NULL,
-          dataset_id INTEGER, FOREIGN KEY(dataset_id) REFERENCES datasets(id)
+          dataset_id INTEGER, home_xg REAL, away_xg REAL,
+          FOREIGN KEY(dataset_id) REFERENCES datasets(id)
         );
         CREATE TABLE IF NOT EXISTS predictions (
           id INTEGER PRIMARY KEY AUTOINCREMENT, match_id TEXT NOT NULL, kickoff TEXT NOT NULL,
           home_team TEXT NOT NULL, away_team TEXT NOT NULL, probabilities_json TEXT NOT NULL,
           selected_market TEXT, odds REAL, ev REAL, model_version TEXT NOT NULL,
           predicted_at TEXT NOT NULL, actual_home_goals INTEGER, actual_away_goals INTEGER,
-          simulated_profit REAL, stake REAL NOT NULL DEFAULT 0,
+          simulated_profit REAL, stake REAL NOT NULL DEFAULT 0, closing_odds REAL,
           UNIQUE(match_id, model_version, predicted_at)
         );
         """)
-        # Safe additive migration for databases created by earlier V1 builds.
-        columns = {row[1] for row in conn.execute("PRAGMA table_info(predictions)")}
-        if "stake" not in columns:
-            conn.execute("ALTER TABLE predictions ADD COLUMN stake REAL NOT NULL DEFAULT 0")
+        mcols = {r[1] for r in conn.execute("PRAGMA table_info(matches)")}
+        for name in ("home_xg", "away_xg"):
+            if name not in mcols: conn.execute(f"ALTER TABLE matches ADD COLUMN {name} REAL")
+        pcols = {r[1] for r in conn.execute("PRAGMA table_info(predictions)")}
+        for name, declaration in (("stake", "REAL NOT NULL DEFAULT 0"), ("closing_odds", "REAL")):
+            if name not in pcols: conn.execute(f"ALTER TABLE predictions ADD COLUMN {name} {declaration}")
         conn.commit()
 
 
-def save_dataset(df: pd.DataFrame, filename: str, content_hash: str,
-                 db_path: str | Path = DEFAULT_DB) -> int:
+def save_dataset(df, filename, content_hash, db_path=DEFAULT_DB):
     initialize(db_path)
+    has_xg = {"home_xg", "away_xg"}.issubset(df.columns)
     with connect(db_path) as conn:
-        conn.execute(
-            "INSERT OR IGNORE INTO datasets(uploaded_at,filename,row_count,content_hash) VALUES(?,?,?,?)",
-            (datetime.now(timezone.utc).isoformat(), filename, len(df), content_hash))
-        row = conn.execute("SELECT id FROM datasets WHERE content_hash=?", (content_hash,)).fetchone()
-        dataset_id = int(row[0])
+        conn.execute("INSERT OR IGNORE INTO datasets(uploaded_at,filename,row_count,content_hash) VALUES(?,?,?,?)",
+                     (datetime.now(timezone.utc).isoformat(), filename, len(df), content_hash))
+        dataset_id = int(conn.execute("SELECT id FROM datasets WHERE content_hash=?", (content_hash,)).fetchone()[0])
         for r in df.itertuples():
+            hxg, axg = (float(r.home_xg), float(r.away_xg)) if has_xg else (None, None)
             conn.execute("""INSERT OR IGNORE INTO matches
-                (match_id,date,home_team,away_team,home_goals,away_goals,dataset_id)
-                VALUES(?,?,?,?,?,?,?)""",
+                (match_id,date,home_team,away_team,home_goals,away_goals,dataset_id,home_xg,away_xg)
+                VALUES(?,?,?,?,?,?,?,?,?)""",
                 (str(r.match_id), r.date.isoformat(), str(r.home_team), str(r.away_team),
-                 int(r.home_goals), int(r.away_goals), dataset_id))
+                 int(r.home_goals), int(r.away_goals), dataset_id, hxg, axg))
         conn.commit()
         return dataset_id
 
 
-def load_matches(db_path: str | Path = DEFAULT_DB) -> pd.DataFrame:
+def load_matches(db_path=DEFAULT_DB):
     initialize(db_path)
     with connect(db_path) as conn:
         return pd.read_sql_query("SELECT * FROM matches ORDER BY date", conn)
 
 
-def save_prediction(match_id: str, kickoff: str, home_team: str, away_team: str,
-                    probabilities: dict, selected_market: str | None = None,
-                    odds: float | None = None, ev: float | None = None,
-                    model_version: str = "1.0.0", stake: float = 0.0,
-                    db_path: str | Path = DEFAULT_DB) -> int:
+def save_prediction(match_id, kickoff, home_team, away_team, probabilities,
+                    selected_market=None, odds=None, ev=None, model_version="1.0.0",
+                    stake=0.0, db_path=DEFAULT_DB):
     initialize(db_path)
     kickoff_ts = pd.Timestamp(kickoff)
-    if kickoff_ts.tzinfo is None:
-        raise ValueError("Kickoff must include a timezone, e.g. 2026-11-14T19:00:00+07:00.")
-    if kickoff_ts.tz_convert("UTC") <= pd.Timestamp.now(tz="UTC"):
-        raise ValueError("Prediction must be saved before kickoff.")
+    if kickoff_ts.tzinfo is None: raise ValueError("Kickoff must include a timezone.")
+    if kickoff_ts.tz_convert("UTC") <= pd.Timestamp.now(tz="UTC"): raise ValueError("Prediction must be saved before kickoff.")
     if not match_id.strip() or not home_team.strip() or not away_team.strip() or home_team == away_team:
         raise ValueError("Valid match ID and two different team names are required.")
-    if stake < 0:
-        raise ValueError("Stake cannot be negative.")
+    if stake < 0: raise ValueError("Stake cannot be negative.")
     with connect(db_path) as conn:
         cur = conn.execute("""INSERT INTO predictions
           (match_id,kickoff,home_team,away_team,probabilities_json,selected_market,odds,ev,model_version,predicted_at,stake)
@@ -95,34 +92,72 @@ def save_prediction(match_id: str, kickoff: str, home_team: str, away_team: str,
         return int(cur.lastrowid)
 
 
-def settle_prediction(prediction_id: int, home_goals: int, away_goals: int,
-                      profit: float, db_path: str | Path = DEFAULT_DB) -> None:
+def record_closing_odds(prediction_id, closing_odds, db_path=DEFAULT_DB):
+    initialize(db_path)
+    if closing_odds is None or float(closing_odds) <= 1: raise ValueError("Closing odds must be greater than 1.")
+    with connect(db_path) as conn:
+        row = conn.execute("SELECT kickoff,selected_market FROM predictions WHERE id=?", (prediction_id,)).fetchone()
+        if row is None: raise ValueError("Prediction not found.")
+        if not row[1]: raise ValueError("NO BET records do not have closing odds.")
+        if pd.Timestamp.now(tz="UTC") >= pd.Timestamp(row[0]).tz_convert("UTC"):
+            raise ValueError("Closing odds must be recorded before kickoff.")
+        conn.execute("UPDATE predictions SET closing_odds=? WHERE id=?", (float(closing_odds), prediction_id))
+        conn.commit()
+
+
+def settle_prediction(prediction_id, home_goals, away_goals, profit, db_path=DEFAULT_DB):
     initialize(db_path)
     if isinstance(home_goals, bool) or isinstance(away_goals, bool) or home_goals < 0 or away_goals < 0:
         raise ValueError("Actual goals must be non-negative integers.")
-    if int(home_goals) != home_goals or int(away_goals) != away_goals:
-        raise ValueError("Actual goals must be integers.")
+    if int(home_goals) != home_goals or int(away_goals) != away_goals: raise ValueError("Actual goals must be integers.")
     with connect(db_path) as conn:
         row = conn.execute("SELECT kickoff,actual_home_goals FROM predictions WHERE id=?", (prediction_id,)).fetchone()
-        if row is None:
-            raise ValueError("Prediction not found.")
-        if pd.Timestamp.now(tz="UTC") < pd.Timestamp(row[0]).tz_convert("UTC"):
-            raise ValueError("Cannot settle a prediction before its kickoff.")
-        if row[1] is not None:
-            raise ValueError("Prediction has already been settled and is immutable.")
+        if row is None: raise ValueError("Prediction not found.")
+        if pd.Timestamp.now(tz="UTC") < pd.Timestamp(row[0]).tz_convert("UTC"): raise ValueError("Cannot settle before kickoff.")
+        if row[1] is not None: raise ValueError("Prediction has already been settled and is immutable.")
         conn.execute("""UPDATE predictions SET actual_home_goals=?,actual_away_goals=?,simulated_profit=?
                         WHERE id=? AND actual_home_goals IS NULL""",
                      (int(home_goals),int(away_goals),float(profit),prediction_id))
         conn.commit()
 
 
-def list_predictions(db_path: str | Path = DEFAULT_DB) -> pd.DataFrame:
+def list_predictions(db_path=DEFAULT_DB):
     initialize(db_path)
     with connect(db_path) as conn:
         return pd.read_sql_query("SELECT * FROM predictions ORDER BY predicted_at DESC", conn)
 
 
-def list_datasets(db_path: str | Path = DEFAULT_DB) -> pd.DataFrame:
+def list_datasets(db_path=DEFAULT_DB):
     initialize(db_path)
     with connect(db_path) as conn:
         return pd.read_sql_query("SELECT * FROM datasets ORDER BY uploaded_at DESC", conn)
+
+
+def backup_database(db_path=DEFAULT_DB, backup_path="football_quant_lab_backup.sqlite3"):
+    """Create a transactionally consistent SQLite snapshot."""
+    source = Path(db_path)
+    if not source.exists(): raise FileNotFoundError(source)
+    target = Path(backup_path)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    with sqlite3.connect(source) as src, sqlite3.connect(target) as dst:
+        src.backup(dst)
+    return target
+
+
+def restore_database(backup_path, db_path=DEFAULT_DB):
+    """Validate a backup before atomically replacing the active database."""
+    source, target = Path(backup_path), Path(db_path)
+    if not source.exists(): raise FileNotFoundError(source)
+    with sqlite3.connect(source) as conn:
+        check = conn.execute("PRAGMA integrity_check").fetchone()
+        tables = {r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+        if not check or check[0] != "ok" or not {"datasets","matches","predictions"}.issubset(tables):
+            raise ValueError("Backup is invalid or missing required Football Quant Lab tables.")
+    target.parent.mkdir(parents=True, exist_ok=True)
+    temp = target.with_suffix(target.suffix + ".restore.tmp")
+    try:
+        with sqlite3.connect(source) as src, sqlite3.connect(temp) as dst: src.backup(dst)
+        temp.replace(target)
+    finally:
+        if temp.exists(): temp.unlink()
+    initialize(target)
