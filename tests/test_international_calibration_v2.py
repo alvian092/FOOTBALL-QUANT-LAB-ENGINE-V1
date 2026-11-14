@@ -56,5 +56,7 @@ def test_experiment_report_has_temporal_and_segment_metrics():
     _, report = run_experiments(frame, bootstrap_samples=100)
     assert report["default_configuration_predeclared"] is True
     assert set(report["segments"]) == {"friendly", "qualification", "tournament"}
-    assert "calibrated_cluster_bootstrap_ci_95" in report["overall"]
+    assert "paired_date_cluster_bootstrap_ci_95" in report["overall"]
+    assert "raw" in report["by_calendar_year"].get("2020", {})
+    assert "calibrated" in report["by_calendar_year"].get("2020", {})
     assert report["sensitivity_grid"]
