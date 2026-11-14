@@ -9,7 +9,7 @@ from __future__ import annotations
 import argparse
 import json
 import re
-import time
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 from pathlib import Path
 from urllib.error import HTTPError, URLError
@@ -109,7 +109,7 @@ def _tree_files(tree_text: str, start_year: int, end_year: int) -> list[tuple[st
 
 
 def fetch_international_results(output_csv: str | Path, start_year: int = 2000,
-                                end_year: int = 2026, pause_seconds: float = 0.03) -> dict:
+                                end_year: int = 2026, pause_seconds: float = 0.0) -> dict:
     """Discover source files from TREE.md, then fetch only selected senior competitions."""
     if start_year < 1872 or end_year < start_year:
         raise ValueError("Invalid international results year range.")
@@ -117,14 +117,22 @@ def fetch_international_results(output_csv: str | Path, start_year: int = 2000,
     files = _tree_files(tree, start_year, end_year)
     if not files:
         raise RuntimeError("No matching international competition files found in source tree.")
-    rows, missing = [], []
-    for competition, filename in files:
+    def fetch_one(item: tuple[str, str]) -> tuple[str, str, list[dict], str | None]:
+        competition, filename = item
         url = f"{SOURCE_URL}/raw/refs/heads/master/{competition}/{filename}"
         try:
-            rows.extend(parse_football_txt(_read_url(url), filename, competition))
-        except RuntimeError as exc:
-            missing.append({"file": f"{competition}/{filename}", "reason": str(exc)})
-        time.sleep(pause_seconds)
+            parsed_rows = parse_football_txt(_read_url(url), filename, competition)
+            return competition, filename, parsed_rows, None
+        except (RuntimeError, ValueError) as exc:
+            return competition, filename, [], str(exc)
+
+    rows, missing = [], []
+    # Parallel bounded requests keep the historical multi-competition fetch practical.
+    with ThreadPoolExecutor(max_workers=8) as executor:
+        for competition, filename, parsed_rows, error in executor.map(fetch_one, files):
+            rows.extend(parsed_rows)
+            if error:
+                missing.append({"file": f"{competition}/{filename}", "reason": error})
     frame = pd.DataFrame(rows)
     if frame.empty:
         raise RuntimeError("No settled international fixtures parsed.")
