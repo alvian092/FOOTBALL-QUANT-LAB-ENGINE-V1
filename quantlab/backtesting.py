@@ -95,7 +95,8 @@ def walk_forward_backtest(matches: pd.DataFrame, predictor, min_train=100,
     if results.empty:
         return {"results": results, "model": _scores([], []), "market": _scores([], []),
                 "model_brier_ci": (None, None), "market_brier_ci": (None, None),
-                "model_edge_vs_market_brier": None, "model_edge_vs_market_log_loss": None}
+                "model_edge_vs_market_brier": None, "model_edge_vs_market_log_loss": None,
+                "model_edge_brier_ci": (None, None), "model_edge_log_loss_ci": (None, None)}
     model_p = results[[f"model_{k}_p" for k in CLASS_ORDER]].to_numpy()
     outcomes = results.outcome.to_numpy(dtype=int)
     model = _scores(model_p, outcomes)
