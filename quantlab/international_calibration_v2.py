@@ -129,12 +129,12 @@ def run_experiments(predictions: pd.DataFrame, bootstrap_samples: int = 2000) ->
     if not np.isin(y, [0, 1, 2]).all():
         raise ValueError("Outcome must be encoded as 0, 1, or 2.")
 
-    configs = [(mh, mc, shrink) for mh in (300, 500, 800) for mc in (100, 300) for shrink in (100, 300)]
+    configs = [(300, 100, 100), (300, 300, 300), (500, 100, 100), (500, 300, 300)]
     reports = {}
     outputs = {}
     for min_hist, min_cat, shrink in configs:
         key = f"global_min{min_hist}_category_min{min_cat}_shrink{shrink}"
-        calibrated, _ = _prequential(frame, min_hist, min_cat, shrink, 10)
+        calibrated, _ = _prequential(frame, min_hist, min_cat, shrink, 30)
         outputs[key] = calibrated
         valid = np.isfinite(calibrated).all(axis=1)
         reports[key] = {"settings": {"min_global_history": min_hist, "min_category_history": min_cat, "shrinkage_prior": shrink},
@@ -162,7 +162,7 @@ def run_experiments(predictions: pd.DataFrame, bootstrap_samples: int = 2000) ->
         }
     summary = {
         "method": "strict-date prequential category temperature with log-space shrinkage to global temperature",
-        "default_configuration": {"min_global_history": 500, "min_category_history": 300, "shrinkage_prior": 300, "refit_every_dates": 10},
+        "default_configuration": {"min_global_history": 500, "min_category_history": 300, "shrinkage_prior": 300, "refit_every_dates": 30},
         "default_configuration_predeclared": True,
         "calibrated_rows": int(valid.sum()),
         "segments": segments,
