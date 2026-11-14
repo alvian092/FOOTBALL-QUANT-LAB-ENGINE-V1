@@ -119,3 +119,30 @@ python -m compileall -q app.py quantlab tests
 The engine is a research and record-keeping tool, not a guaranteed-pick system or financial advice. xG depends on user-supplied source quality. The current calibration report covers home-win probability only. CLV depends on accurate manually captured closing odds. ROI is meaningful only after a sufficiently large, representative sample of settled bets. No lineup/injury feed, live odds history, or automated data provider is bundled.
 
 Never chase losses or use martingale staking. When data quality, calibration, or expected value is inadequate, the correct output is **NO BET**.
+
+
+## V6 — International Football (senior men's)
+
+The separate international module is intentionally isolated from domestic club ratings. It currently covers selected senior men's full-international competition folders and friendlies from the community-maintained `openfootball/internationals` repository (CC0-1.0). The repository describes its historical dataset as men's full internationals and excludes Olympic, B-team, U23, and league-select fixtures. It is not an official FIFA data feed, and the source does not independently verify FIFA A-match status for every friendly.
+
+### Included competitions
+- FIFA World Cup and World Cup qualification.
+- UEFA European Championship, qualification, and Nations League.
+- AFC Asian Cup and qualification; Africa Cup of Nations and qualification.
+- Copa América; CONCACAF Gold Cup and qualification; OFC Nations Cup.
+- Senior men's international friendlies.
+
+### Modeling policy
+- Independent national-team Elo ratings; club Elo and domestic league goal rates are never imported.
+- Strict-date walk-forward: every fixture on a date is predicted before any result from that date updates ratings.
+- Friendlies use a lower Elo K multiplier (0.55) to reduce the influence of matches with more variable squads and incentives. This is an initial heuristic to be tested, not a proven optimum.
+- Competitive tournament multipliers are explicit and configurable in `quantlab/international.py`.
+- The current baseline uses a fixed draw prior and modest home advantage. Neutral venue, lineups, player availability, travel, rest, and squad rotation are not yet modeled.
+
+### Run
+```bash
+python -m quantlab.international fetch --output data/international/senior_men.csv --start-year 2000 --end-year 2026
+python -m quantlab.international backtest --input data/international/senior_men.csv --output-dir artifacts/international_v1 --min-train 50
+```
+
+The first release is a results-only baseline. It reports multiclass Brier score, log loss, and accuracy; no ROI, yield, CLV, or betting edge is claimed without matched historical odds and a separate market backtest. Women's, youth, Olympic, and other non-senior competitions are out of scope for this phase and require separate source validation.
