@@ -49,3 +49,15 @@ def test_market_backtest_rejects_missing_columns():
     predictions, odds = _inputs()
     with pytest.raises(ValueError, match="Odds file missing"):
         evaluate_market(predictions, odds.drop(columns=["pin_close_away"]))
+
+
+def test_market_backtest_reports_team_match_but_date_window_mismatch():
+    predictions, odds = _inputs()
+    odds.loc[0, "kickoff_utc"] = "2026-08-04T18:00:00Z"
+    bets, summary = evaluate_market(predictions, odds)
+    assert bets.empty
+    diagnostics = summary["matching_diagnostics"]
+    assert diagnostics["exact_team_pair_candidates"] == 1
+    assert diagnostics["within_one_day_matches"] == 0
+    assert diagnostics["prediction_date_min"] is not None
+    assert diagnostics["odds_date_min"] is not None
