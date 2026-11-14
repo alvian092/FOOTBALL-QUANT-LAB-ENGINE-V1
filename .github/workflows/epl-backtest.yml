@@ -49,25 +49,31 @@ jobs:
           curl --fail --location --retry 3 \
             https://raw.githubusercontent.com/tipsaudit/track-record-public/main/datasets/tipsaudit-predictions-all.csv \
             --output data/market/tipsaudit-predictions-all.csv
-      - name: Evaluate model odds, ROI, CLV and drawdown
+      - name: Evaluate raw adaptive model market performance
         run: |
           python -m quantlab.market_backtest \
             --predictions artifacts/cross_league/cross_league_oos_predictions.csv \
             --odds data/market/tipsaudit-predictions-all.csv \
             --model-prefix model_adaptive --min-ev 0.03 \
-            --output-dir artifacts/market_intelligence
-      - name: Upload V5 and international evaluation reports
+            --output-dir artifacts/market_intelligence_raw
+      - name: Evaluate calibrated adaptive model market performance
+        run: |
+          python -m quantlab.market_backtest \
+            --predictions artifacts/cross_league/cross_league_oos_predictions.csv \
+            --odds data/market/tipsaudit-predictions-all.csv \
+            --model-prefix model_adaptive_calibrated --min-ev 0.03 \
+            --output-dir artifacts/market_intelligence_calibrated
+      - name: Upload V5 evaluation reports
         uses: actions/upload-artifact@v4
         with:
-          name: football-quant-lab-v5-international-evaluation
+          name: football-quant-lab-v5-calibrated-market-validation
           path: |
             artifacts/epl_v4_backtest/
             artifacts/epl_v4_robustness/
             artifacts/epl_v4_calibration/
             artifacts/cross_league/
-            artifacts/market_intelligence/
-            artifacts/international_v1/
-            artifacts/international_market_intelligence/
+            artifacts/market_intelligence_raw/
+            artifacts/market_intelligence_calibrated/
           if-no-files-found: error
           retention-days: 90
 
