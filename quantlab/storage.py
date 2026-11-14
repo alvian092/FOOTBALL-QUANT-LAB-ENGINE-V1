@@ -1,6 +1,7 @@
 """SQLite persistence, immutable prediction snapshots, and safe backup/restore."""
 from __future__ import annotations
 import json
+import math
 import sqlite3
 from pathlib import Path
 from datetime import datetime, timezone
@@ -175,10 +176,11 @@ def save_odds_snapshot(match_id, market, odds_by_selection, captured_at, bookmak
     initialize(db_path)
     stamp = pd.Timestamp(captured_at)
     if stamp.tzinfo is None: raise ValueError("captured_at must include a timezone.")
-    if not match_id or not market or not isinstance(odds_by_selection, dict) or len(odds_by_selection) < 2:
+    if not str(match_id).strip() or not str(market).strip() or not isinstance(odds_by_selection, dict) or len(odds_by_selection) < 2:
         raise ValueError("Provide match_id, market, and at least two mutually exclusive selections.")
-    if any(float(v) <= 1 for v in odds_by_selection.values()):
-        raise ValueError("All decimal odds must be greater than 1.")
+    if any(not str(k).strip() or not math.isfinite(float(v)) or float(v) <= 1
+           for k,v in odds_by_selection.items()):
+        raise ValueError("Selections must be named and all decimal odds must be finite and greater than 1.")
     with connect(db_path) as conn:
         conn.executemany("""INSERT OR IGNORE INTO odds_snapshots
             (match_id,market,selection,bookmaker,odds,captured_at,source) VALUES(?,?,?,?,?,?,?)""",
