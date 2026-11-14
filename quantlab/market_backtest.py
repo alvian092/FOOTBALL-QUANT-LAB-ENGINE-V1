@@ -71,9 +71,10 @@ def evaluate_market(predictions: pd.DataFrame, odds: pd.DataFrame,
     o = o.dropna(subset=["kickoff_utc"])
     o["market_date"] = o.kickoff_utc.dt.floor("D")
     p["prediction_date"] = p.date.dt.floor("D")
-    candidates = p.merge(o, on=["home_key", "away_key"], how="inner", suffixes=("_model", "_market"))
-    candidates["date_gap_days"] = (candidates.market_date - candidates.prediction_date).dt.days.abs()
-    candidates = candidates[candidates.date_gap_days <= 1].sort_values(
+    pair_candidates = p.merge(o, on=["home_key", "away_key"], how="inner", suffixes=("_model", "_market"))
+    exact_team_pair_candidates = int(len(pair_candidates))
+    pair_candidates["date_gap_days"] = (pair_candidates.market_date - pair_candidates.prediction_date).dt.days.abs()
+    candidates = pair_candidates[pair_candidates.date_gap_days <= 1].sort_values(
         ["date_gap_days", "kickoff_utc"], kind="stable"
     )
     candidates = candidates.drop_duplicates(subset=["match_id"] if "match_id" in candidates else ["home_key", "away_key", "prediction_date"])
@@ -114,8 +115,17 @@ def evaluate_market(predictions: pd.DataFrame, odds: pd.DataFrame,
         })
     bets = pd.DataFrame(rows)
     matched = int(len(candidates))
+    diagnostics = {
+        "prediction_rows": int(len(p)), "eligible_odds_rows": int(len(o)),
+        "prediction_date_min": str(p.date.min()) if p.date.notna().any() else None,
+        "prediction_date_max": str(p.date.max()) if p.date.notna().any() else None,
+        "odds_date_min": str(o.kickoff_utc.min()) if o.kickoff_utc.notna().any() else None,
+        "odds_date_max": str(o.kickoff_utc.max()) if o.kickoff_utc.notna().any() else None,
+        "exact_team_pair_candidates": exact_team_pair_candidates,
+        "within_one_day_matches": matched,
+    }
     if bets.empty:
-        summary = {"matched_fixtures_with_prices": matched, "bets": 0, "min_ev": min_ev,
+        summary = {"matching_diagnostics": diagnostics, "matched_fixtures_with_prices": matched, "bets": 0, "min_ev": min_ev,
                    "note": "No qualifying bets. This is not a zero-loss result; inspect odds coverage and edge threshold."}
         return bets, summary
     bets = bets.sort_values(["date", "home_team", "away_team"]).reset_index(drop=True)
@@ -124,6 +134,7 @@ def evaluate_market(predictions: pd.DataFrame, odds: pd.DataFrame,
     bets["drawdown"] = bets.running_peak - bets.cumulative_profit
     stake = float(len(bets))
     summary = {
+        "matching_diagnostics": diagnostics,
         "matched_fixtures_with_prices": matched, "bets": int(len(bets)),
         "coverage_of_matched_predictions": float(len(bets) / matched) if matched else 0.0,
         "min_ev": min_ev, "staking": "flat 1 unit per bet; max one 1X2 selection per match",
