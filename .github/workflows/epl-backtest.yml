@@ -43,6 +43,8 @@ jobs:
             --input ligue1=data/cross_league/ligue1.csv \
             --input eredivisie=data/cross_league/eredivisie.csv \
             --output-dir artifacts/cross_league --min-train 100 --min-calibration-history 300
+      - name: Run category-aware calibration sensitivity and temporal validation
+        run: python -m quantlab.international_calibration_v2 --input artifacts/international_v1/international_oos_predictions.csv --output-dir artifacts/international_v2 --bootstrap-samples 2000
       - name: Fetch CC-BY-4.0 market ledger
         run: |
           mkdir -p data/market
@@ -111,6 +113,13 @@ jobs:
             --odds data/market/tipsaudit-predictions-all.csv \
             --model-prefix model_intl_calibrated --min-ev 0.03 \
             --output-dir artifacts/international_market_intelligence
+      - name: Evaluate category-calibrated international odds, ROI, CLV and drawdown
+        run: |
+          python -m quantlab.market_backtest \\
+            --predictions artifacts/international_v2/international_v2_calibrated_predictions.csv \\
+            --odds data/market/tipsaudit-predictions-all.csv \\
+            --model-prefix model_intl_v2 --min-ev 0.03 \\
+            --output-dir artifacts/international_market_intelligence_v2
       - name: Upload international evaluation reports
         uses: actions/upload-artifact@v4
         with:
@@ -119,5 +128,7 @@ jobs:
             data/international/senior_men.csv
             artifacts/international_v1/
             artifacts/international_market_intelligence/
+            artifacts/international_v2/
+            artifacts/international_market_intelligence_v2/
           if-no-files-found: error
           retention-days: 90
