@@ -10,11 +10,14 @@ import pandas as pd
 import streamlit as st
 
 from quantlab.data import validate_matches_csv, team_form_stats, venue_stats
+from quantlab.backtesting import walk_forward_backtest, segmented_performance
+from quantlab.market_intelligence import validate_odds_snapshots, summarize_odds_movement
 from quantlab.probability import calculate_probabilities, estimate_expected_goals, top_correct_scores
 from quantlab.market import evaluate_value, no_vig_probabilities, overround
 from quantlab.asian_handicap import asian_handicap_outcomes, asian_handicap_ev
 from quantlab.storage import (initialize, load_matches, save_dataset, save_prediction,
-                              list_predictions, settle_prediction, list_datasets, record_closing_odds, backup_database, restore_database)
+                              list_predictions, settle_prediction, list_datasets, record_closing_odds, backup_database, restore_database,
+                              save_odds_snapshot, list_odds_snapshots)
 from quantlab.risk import flat_stake
 from quantlab.evaluation import brier_score, log_loss, backtest_summary, calibration_bins, bankroll_metrics
 
@@ -39,7 +42,7 @@ st.title("⚽ FOOTBALL QUANT LAB")
 st.caption("Quantitative football analysis • Probability • Market intelligence • Risk control")
 page = st.sidebar.radio("NAVIGATION", ["Dashboard Overview", "Match Analysis", "Probability Explorer",
     "Odds Intelligence", "Value Bet Scanner", "Risk Management", "Prediction Tracker",
-    "Model Performance", "CSV Data Management", "Backup & Restore", "Settings"])
+    "Model Performance", "CSV Data Management", "Walk-Forward Backtest", "Market Intelligence", "Backup & Restore", "Settings"])
 
 matches = load_matches(DB_PATH)
 preds = list_predictions(DB_PATH)
@@ -101,6 +104,42 @@ elif page == "CSV Data Management":
     if DB_PATH.exists():
         st.download_button("Download SQLite backup", DB_PATH.read_bytes(),
                            "football_quant_lab_backup.sqlite3", mime="application/octet-stream")
+
+elif page == "Market Intelligence":
+    st.subheader("Historical Market Intelligence")
+    st.write("Upload timestamped bookmaker prices. Each snapshot should contain all mutually exclusive selections for one match, market, bookmaker and timestamp.")
+    st.caption("CSV fields: match_id, market, selection, odds, captured_at, optional bookmaker. Example market: 1X2; selections: Home, Draw, Away.")
+    odds_upload = st.file_uploader("Upload odds history CSV", type=["csv"], key="v3_odds_history")
+    if odds_upload:
+        try:
+            raw_odds = pd.read_csv(odds_upload)
+            checked = validate_odds_snapshots(raw_odds)
+            st.success(f"Validated {len(checked)} odds rows.")
+            st.dataframe(checked.head(15), use_container_width=True)
+            if st.button("Import immutable odds snapshots"):
+                for (match_id, market, bookmaker, captured_at), part in checked.groupby(
+                    ["match_id","market","bookmaker","captured_at"], dropna=False):
+                    save_odds_snapshot(match_id,market,dict(zip(part.selection,part.odds)),
+                        captured_at,bookmaker,source=odds_upload.name,db_path=DB_PATH)
+                st.success("Odds snapshots imported. Existing timestamp/selection records are not overwritten.")
+                st.rerun()
+        except Exception as exc:
+            st.error(f"Odds CSV rejected: {exc}")
+    snapshots = list_odds_snapshots(DB_PATH)
+    if not snapshots.empty:
+        movement = summarize_odds_movement(snapshots.rename(columns={"captured_at":"captured_at"}))
+        st.markdown("#### Opening-to-latest movement")
+        if not movement.empty:
+            st.metric("Tracked selection movements",len(movement))
+            st.dataframe(movement,use_container_width=True)
+            st.download_button("Download movement report",movement.to_csv(index=False),
+                "football_quant_lab_market_movement.csv",mime="text/csv")
+        else:
+            st.info("Need at least two selections in each timestamped market snapshot.")
+        st.markdown("#### Raw odds snapshots")
+        st.dataframe(snapshots,use_container_width=True)
+    else:
+        st.info("No historical odds snapshots yet. Upload an odds history CSV to activate movement analysis.")
 
 elif page in ("Match Analysis", "Probability Explorer", "Odds Intelligence", "Value Bet Scanner"):
     st.subheader(page)
@@ -203,6 +242,70 @@ elif page in ("Match Analysis", "Probability Explorer", "Odds Intelligence", "Va
                 values = {k:evaluate_value(probs[k],odds[k],uncertainty=0.03) for k in odds}
                 st.dataframe(pd.DataFrame(values).T, use_container_width=True)
                 st.warning("Provisional only: uncertainty margin is a conservative placeholder, not a fitted confidence interval. Calibration/backtesting is not complete; do not treat this as a live betting signal.")
+
+elif page == "Walk-Forward Backtest":
+    st.subheader("Chronological Walk-Forward Backtest")
+    st.caption("Each fixture is predicted using strictly earlier results. Same-day results are excluded. League-specific histories are used when league metadata exists.")
+    if matches.empty:
+        st.warning("Import historical match CSV first.")
+    else:
+        max_train = max(5, min(len(matches)-1, 500))
+        min_train = st.slider("Minimum prior matches per league",5,max_train,min(50,max_train))
+        bootstrap_n = st.selectbox("Bootstrap samples for 95% interval",[500,1000,2000],index=1)
+        if st.button("Run walk-forward backtest",type="primary"):
+            def historical_predictor(train, fixture):
+                league_home = float(train.home_goals.mean())
+                league_away = float(train.away_goals.mean())
+                hstats = team_form_stats(train, str(fixture.home_team), limit=20, half_life=5)
+                astats = team_form_stats(train, str(fixture.away_team), limit=20, half_life=5)
+                has_xg = {"home_xg","away_xg"}.issubset(train.columns) and train[["home_xg","away_xg"]].notna().all().all()
+                if has_xg:
+                    league_home, league_away = float(train.home_xg.mean()), float(train.away_xg.mean())
+                    h_for, h_against = hstats["xg_for"], hstats["xg_against"]
+                    a_for, a_against = astats["xg_for"], astats["xg_against"]
+                    if None in (h_for,h_against,a_for,a_against):
+                        has_xg = False
+                if not has_xg:
+                    h_for, h_against = hstats["scored_per_match"], hstats["conceded_per_match"]
+                    a_for, a_against = astats["scored_per_match"], astats["conceded_per_match"]
+                    league_home, league_away = float(train.home_goals.mean()), float(train.away_goals.mean())
+                lh, la = estimate_expected_goals(max(.05,h_for),max(.05,h_against),
+                    max(.05,a_for),max(.05,a_against),max(.05,league_home),max(.05,league_away))
+                probs = calculate_probabilities(lh,la)
+                return {"home":probs.home_win,"draw":probs.draw,"away":probs.away_win}
+            try:
+                report = walk_forward_backtest(matches,historical_predictor,min_train=min_train,
+                    bootstrap_samples=bootstrap_n,group_by_league=("league" in matches.columns))
+                st.session_state["v3_backtest"] = report
+            except Exception as exc:
+                st.error(f"Backtest failed: {exc}")
+        report = st.session_state.get("v3_backtest")
+        if report:
+            results = report["results"]
+            if results.empty:
+                st.warning("No test fixtures met the minimum historical sample. Reduce the minimum or import more history.")
+            else:
+                st.markdown("#### Model performance")
+                a,b,c = st.columns(3)
+                a.metric("Out-of-sample fixtures",report["model"]["n"])
+                b.metric("Model Brier",f"{report['model']['brier']:.4f}")
+                c.metric("Model log loss",f"{report['model']['log_loss']:.4f}")
+                st.caption(f"Model Brier 95% bootstrap CI: {report['model_brier_ci'][0]:.4f}–{report['model_brier_ci'][1]:.4f}")
+                if report["market"]["n"]:
+                    x,y,z = st.columns(3)
+                    x.metric("Bookmaker fixtures",report["market"]["n"])
+                    y.metric("Bookmaker Brier",f"{report['market']['brier']:.4f}")
+                    z.metric("Bookmaker log loss",f"{report['market']['log_loss']:.4f}")
+                    st.write(f"Model edge vs market — Brier improvement: **{report['model_edge_vs_market_brier']:+.4f}** • Log-loss improvement: **{report['model_edge_vs_market_log_loss']:+.4f}** (positive favours model).")
+                else:
+                    st.info("No complete 1X2 odds columns found. Model vs bookmaker comparison is unavailable.")
+                st.dataframe(results,use_container_width=True)
+                st.download_button("Download out-of-sample predictions",results.to_csv(index=False),
+                    "football_quant_lab_walk_forward.csv",mime="text/csv")
+    settled_bets = preds[preds.actual_home_goals.notna() & preds.selected_market.notna()].copy() if not preds.empty else pd.DataFrame()
+    if not settled_bets.empty:
+        st.markdown("#### Settled bet segments")
+        st.dataframe(segmented_performance(settled_bets,group_by="selected_market",min_bets=30),use_container_width=True)
 
 elif page == "Risk Management":
     st.subheader("Risk Management")
