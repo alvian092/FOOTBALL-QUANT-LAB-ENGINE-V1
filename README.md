@@ -123,7 +123,7 @@ Never chase losses or use martingale staking. When data quality, calibration, or
 
 ## V6 — International Football (senior men's)
 
-The separate international module is intentionally isolated from domestic club ratings. It currently covers selected senior men's full-international competition folders and friendlies from the community-maintained `openfootball/internationals` repository (CC0-1.0). The repository describes its historical dataset as men's full internationals and excludes Olympic, B-team, U23, and league-select fixtures. It is not an official FIFA data feed, and the source does not independently verify FIFA A-match status for every friendly.
+The separate international module is intentionally isolated from domestic club ratings. It uses the CC0-1.0 Mon Sport Info international-results CSV derived from martj42, filters to men's full internationals, and falls back to the CC0 `openfootball/internationals` mirror if the primary feed is unavailable. The current feed snapshot is updated 2026-07-20; the latest settled match parsed in the latest run was 2026-07-15. It is not an official FIFA data feed, and FIFA A-match status is not independently verified for every friendly.
 
 ### Included competitions
 - FIFA World Cup and World Cup qualification.
@@ -145,7 +145,7 @@ python -m quantlab.international fetch --output data/international/senior_men.cs
 python -m quantlab.international backtest --input data/international/senior_men.csv --output-dir artifacts/international_v1 --min-train 50
 ```
 
-The first release is a results-only baseline. It reports multiclass Brier score, log loss, and accuracy; no ROI, yield, CLV, or betting edge is claimed without matched historical odds and a separate market backtest. Women's, youth, Olympic, and other non-senior competitions are out of scope for this phase and require separate source validation.
+The first release is a results-only baseline. It reports multiclass Brier score, log loss, and accuracy; segmented evaluation and expanding prequential temperature calibration are also included. The initial market-ledger test found no national-team fixture odds in the supplied club-market ledger, so ROI, yield, CLV, and drawdown are not measurable until a suitable international odds source is connected. Women's, youth, Olympic, and other non-senior competitions are out of scope for this phase and require separate source validation.
 
 
 ### International evaluation: competition segments, calibration, odds and CLV
