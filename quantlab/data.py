@@ -55,7 +55,7 @@ def team_form_stats(matches: pd.DataFrame, team: str, limit: int = 10,
     rows = rows.sort_values("date", ascending=False).head(limit)
     if rows.empty: raise ValueError(f"No historical matches found for {team}.")
     gf, ga, xgf, xga = [], [], [], []
-    has_xg = XG_COLUMNS.issubset(rows.columns)
+    has_xg = XG_COLUMNS.issubset(rows.columns) and rows[["home_xg", "away_xg"]].notna().all().all()
     for r in rows.itertuples():
         is_home = r.home_team == team
         gf.append(r.home_goals if is_home else r.away_goals)
