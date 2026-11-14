@@ -5,7 +5,9 @@ on:
     paths:
       - "data/epl_pilot/**"
       - "quantlab/epl_backtest.py"
+      - "quantlab/epl_robustness.py"
       - "tests/test_epl_v4_backtest.py"
+      - "tests/test_epl_robustness.py"
       - ".github/workflows/epl-backtest.yml"
       - "requirements.txt"
   workflow_dispatch:
@@ -28,10 +30,14 @@ jobs:
         run: pytest -q
       - name: Run EPL V4 walk-forward backtest
         run: python -m quantlab.epl_backtest --input data/epl_pilot/epl_results_2010_2026.csv --output-dir artifacts/epl_v4_backtest --min-train 100 --bootstrap-samples 1000
-      - name: Upload EPL backtest report
+      - name: Run paired bootstrap and season robustness
+        run: python -m quantlab.epl_robustness --input artifacts/epl_v4_backtest/epl_v4_oos_predictions.csv --output-dir artifacts/epl_v4_robustness --bootstrap-samples 20000 --seed 20261114
+      - name: Upload EPL backtest and robustness reports
         uses: actions/upload-artifact@v4
         with:
           name: epl-v4-walk-forward-report
-          path: artifacts/epl_v4_backtest/
+          path: |
+            artifacts/epl_v4_backtest/
+            artifacts/epl_v4_robustness/
           if-no-files-found: error
           retention-days: 90
