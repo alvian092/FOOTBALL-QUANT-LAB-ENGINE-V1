@@ -80,7 +80,7 @@ def venue_stats(matches: pd.DataFrame, team: str, venue: str, limit: int = 20,
     if rows.empty: raise ValueError(f"No {venue}-venue history found for {team}.")
     gf, ga = ("home_goals", "away_goals") if venue == "home" else ("away_goals", "home_goals")
     xgf, xga = ("home_xg", "away_xg") if venue == "home" else ("away_xg", "home_xg")
-    has_xg = XG_COLUMNS.issubset(rows.columns)
+    has_xg = XG_COLUMNS.issubset(rows.columns) and rows[["home_xg", "away_xg"]].notna().all().all()
     return {"matches": len(rows), "scored_per_match": _weighted_mean(rows[gf], half_life),
             "conceded_per_match": _weighted_mean(rows[ga], half_life),
             "xg_for": _weighted_mean(rows[xgf], half_life) if has_xg else None,
