@@ -11,8 +11,12 @@ def _inputs():
         "away_team": "Beta", "outcome": 0,
         "model_adaptive_home_p": 0.60, "model_adaptive_draw_p": 0.25,
         "model_adaptive_away_p": 0.15,
+        "model_adaptive_calibrated_home_p": 0.58,
+        "model_adaptive_calibrated_draw_p": 0.26,
+        "model_adaptive_calibrated_away_p": 0.16,
     }])
     odds = pd.DataFrame([{
+        "match_id": "market-m1",
         "kickoff_utc": "2026-08-01T18:00:00Z", "home": "Alpha", "away": "Beta",
         "result": "1", "void_reason": "", "teams_reversed_after_logging": 0,
         "pin_open_home": 2.0, "pin_open_draw": 3.5, "pin_open_away": 4.5,
@@ -29,12 +33,26 @@ def test_devig_proportional_probabilities_sum_to_one():
 
 def test_market_backtest_reports_positive_ev_roi_clv_and_drawdown():
     predictions, odds = _inputs()
-    bets, summary = evaluate_market(predictions, odds, min_ev=0.03)
+    bets, summary = evaluate_market(predictions, odds, min_ev=0.03, bootstrap_samples=500)
     assert len(bets) == 1
     assert summary["bets"] == 1
     assert summary["roi_yield"] == 1.0
     assert summary["average_clv_pct"] > 0
     assert summary["max_drawdown_units"] == 0
+    assert summary["sample_assessment"] == "insufficient_sample"
+    assert summary["roi_yield_ci_95"] == [1.0, 1.0]
+    assert summary["average_clv_ci_95"][0] > 0
+
+
+def test_market_backtest_supports_calibrated_probability_prefix():
+    predictions, odds = _inputs()
+    bets, summary = evaluate_market(
+        predictions, odds, model_prefix="model_adaptive_calibrated",
+        min_ev=0.03, bootstrap_samples=500,
+    )
+    assert len(bets) == 1
+    assert np.isclose(bets.iloc[0].model_probability, 0.58)
+    assert summary["sample_assessment"] == "insufficient_sample"
 
 
 def test_market_backtest_filters_reversed_and_void_rows():
@@ -58,6 +76,7 @@ def test_market_backtest_reports_team_match_but_date_window_mismatch():
     assert bets.empty
     diagnostics = summary["matching_diagnostics"]
     assert diagnostics["exact_team_pair_candidates"] == 1
+    assert diagnostics["date_gap_distribution"]["within_3_days"] == 1
     assert diagnostics["within_one_day_matches"] == 0
     assert diagnostics["prediction_date_min"] is not None
     assert diagnostics["odds_date_min"] is not None
